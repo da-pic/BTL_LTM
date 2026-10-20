@@ -1,6 +1,6 @@
 package com.bombit.client.app;
 
-/** Composition root for client startup. UI framework is intentionally not selected yet. */
+/** Điểm khởi tạo và liên kết các thành phần của client. Khung giao diện chưa được lựa chọn ở giai đoạn này. */
 public final class ClientApplication {
     private ClientApplication() {
     }

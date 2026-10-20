@@ -1,2 +1,2 @@
-/** Package reserved for com.bombit.client.lobby responsibilities. */
+/** Gói dành riêng cho các chức năng của com.bombit.client.lobby. */
 package com.bombit.client.lobby;

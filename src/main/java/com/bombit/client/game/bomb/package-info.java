@@ -1,2 +1,2 @@
-/** Package reserved for com.bombit.client.game.bomb responsibilities. */
+/** Gói dành riêng cho các chức năng của com.bombit.client.game.bomb. */
 package com.bombit.client.game.bomb;
