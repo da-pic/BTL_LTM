@@ -1,6 +1,6 @@
 package com.bombit.server.app;
 
-/** Composition root for server startup. Keep game rules out of this class. */
+/** Điểm khởi tạo và liên kết các thành phần của server. Không đặt luật chơi trong lớp này. */
 public final class ServerApplication {
     private ServerApplication() {
     }

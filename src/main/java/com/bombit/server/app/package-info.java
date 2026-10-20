@@ -1,2 +1,2 @@
-/** Package reserved for com.bombit.server.app responsibilities. */
+/** Gói dành riêng cho các chức năng của com.bombit.server.app. */
 package com.bombit.server.app;
