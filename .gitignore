@@ -3,6 +3,8 @@ target/
 *.class
 *.log
 hs_err_pid*
+bin/
+out/
 
 # IDE
 .idea/
@@ -11,8 +13,16 @@ hs_err_pid*
 .project
 .classpath
 .settings/
-out/
-bin/
+.apt_generated
+.factorypath
+.springBeans
+.sts4-cache
+.kotlin
+/nbproject/private/
+/nbbuild/
+/dist/
+/nbdist/
+/.nb-gradle/
 
 # OS
 .DS_Store
