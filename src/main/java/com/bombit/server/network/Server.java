@@ -2,8 +2,8 @@ package com.bombit.server.network;
 
 import com.bombit.server.chat.ChatHandler;
 import com.bombit.server.heartbeat.HeartbeatManager;
-import com.bombit.server.integration.GameEventSink;
-import com.bombit.server.integration.RoomCleanupSink;
+import com.bombit.server.integration.RoomCleanupSessionListener;
+import com.bombit.server.integration.SessionLifecycleListener;
 import com.bombit.server.room.RoomManager;
 import com.bombit.server.session.Session;
 import com.bombit.server.session.SessionManager;
@@ -40,8 +40,8 @@ public final class Server implements AutoCloseable {
         }
         this.serverSocket = new ServerSocket(port);
         BroadcastSender broadcastSender = new BroadcastSender();
-        GameEventSink gameEventSink = new RoomCleanupSink(roomManager, connectionManager, broadcastSender);
-        this.sessionManager = new SessionManager(gameEventSink, RECONNECT_GRACE_SECONDS);
+        SessionLifecycleListener sessionListener = new RoomCleanupSessionListener(roomManager, connectionManager, broadcastSender);
+        this.sessionManager = new SessionManager(sessionListener, RECONNECT_GRACE_SECONDS);
         this.roomManager.setBroadcaster(sessionManager::broadcastToRoom);
         this.chatHandler = new ChatHandler(roomManager, broadcastSender, OUTBOUND_QUEUE_CAPACITY);
         this.heartbeatManager = new HeartbeatManager(

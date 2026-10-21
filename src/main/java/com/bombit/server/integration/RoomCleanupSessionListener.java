@@ -9,14 +9,14 @@ import com.bombit.server.session.Session;
 
 import java.nio.charset.StandardCharsets;
 
-public final class RoomCleanupSink implements GameEventSink {
+public final class RoomCleanupSessionListener implements SessionLifecycleListener {
     public static final short PLAYER_DISCONNECTED_TYPE = 0x0032;
 
     private final RoomManager roomManager;
     private final ConnectionManager connectionManager;
     private final OutboundSender sender;
 
-    public RoomCleanupSink(RoomManager roomManager, ConnectionManager connectionManager, OutboundSender sender) {
+    public RoomCleanupSessionListener(RoomManager roomManager, ConnectionManager connectionManager, OutboundSender sender) {
         this.roomManager = roomManager;
         this.connectionManager = connectionManager;
         this.sender = sender;

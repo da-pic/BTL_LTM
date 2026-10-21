@@ -1,6 +1,6 @@
 package com.bombit.server.session;
 
-import com.bombit.server.integration.GameEventSink;
+import com.bombit.server.integration.SessionLifecycleListener;
 import com.bombit.server.network.BroadcastSender;
 import com.bombit.server.network.OutboundMessage;
 import com.bombit.server.network.OutboundSender;
@@ -18,15 +18,15 @@ public final class SessionManager implements AutoCloseable {
     private final Map<String, Session> sessions = new ConcurrentHashMap<>();
     private final Map<String, ScheduledFuture<?>> disconnectTimers = new ConcurrentHashMap<>();
     private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(2);
-    private final GameEventSink gameEventSink;
+    private final SessionLifecycleListener lifecycleListener;
     private final long reconnectGraceSeconds;
     private final OutboundSender sender = new BroadcastSender();
 
-    public SessionManager(GameEventSink gameEventSink, long reconnectGraceSeconds) {
+    public SessionManager(SessionLifecycleListener lifecycleListener, long reconnectGraceSeconds) {
         if (reconnectGraceSeconds <= 0) {
             throw new IllegalArgumentException("reconnectGraceSeconds must be positive");
         }
-        this.gameEventSink = gameEventSink;
+        this.lifecycleListener = lifecycleListener;
         this.reconnectGraceSeconds = reconnectGraceSeconds;
     }
 
@@ -50,7 +50,7 @@ public final class SessionManager implements AutoCloseable {
             return;
         }
         session.closeSocket();
-        gameEventSink.onPlayerDisconnected(session);
+        lifecycleListener.onPlayerDisconnected(session);
         ScheduledFuture<?> timer = scheduler.schedule(
                 () -> hardDrop(playerId),
                 reconnectGraceSeconds,
@@ -69,7 +69,7 @@ public final class SessionManager implements AutoCloseable {
         cancelDisconnectTimer(playerId);
         session.setState(SessionState.CLOSED);
         session.closeSocket();
-        gameEventSink.onPlayerHardDropped(session);
+        lifecycleListener.onPlayerHardDropped(session);
     }
 
     public boolean reconnect(String playerId, String token, Socket newSocket) {
@@ -88,7 +88,7 @@ public final class SessionManager implements AutoCloseable {
             session.attachSocket(newSocket);
             session.restoreStateAfterReconnect(SessionState.PLAYING);
         }
-        gameEventSink.onPlayerReconnected(session);
+        lifecycleListener.onPlayerReconnected(session);
         return true;
     }
 
@@ -100,7 +100,7 @@ public final class SessionManager implements AutoCloseable {
         }
         session.setState(SessionState.CLOSED);
         session.closeSocket();
-        gameEventSink.onPlayerHardDropped(session);
+        lifecycleListener.onPlayerHardDropped(session);
     }
 
     public void broadcastToRoom(String roomId, OutboundMessage message) {

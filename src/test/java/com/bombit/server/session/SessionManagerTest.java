@@ -1,7 +1,7 @@
 package com.bombit.server.session;
 
 import org.junit.jupiter.api.Test;
-import com.bombit.server.integration.GameEventSink;
+import com.bombit.server.integration.SessionLifecycleListener;
 
 import java.net.Socket;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -12,7 +12,7 @@ class SessionManagerTest {
     @Test
     void reconnectsBeforeGracePeriodAndRejectsWrongToken() throws Exception {
         AtomicInteger reconnects = new AtomicInteger();
-        GameEventSink sink = new GameEventSink() {
+        SessionLifecycleListener sink = new SessionLifecycleListener() {
             public void onPlayerDisconnected(Session session) {}
             public void onPlayerReconnected(Session session) { reconnects.incrementAndGet(); }
             public void onPlayerHardDropped(Session session) {}
@@ -30,7 +30,7 @@ class SessionManagerTest {
 
     @Test
     void restoresPreDisconnectStateWhenPlaying() throws Exception {
-        GameEventSink sink = new GameEventSink() {
+        SessionLifecycleListener sink = new SessionLifecycleListener() {
             public void onPlayerDisconnected(Session session) {}
             public void onPlayerReconnected(Session session) {}
             public void onPlayerHardDropped(Session session) {}
