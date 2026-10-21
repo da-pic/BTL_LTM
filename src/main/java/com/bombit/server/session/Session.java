@@ -10,33 +10,40 @@ import java.util.concurrent.atomic.AtomicReference;
 public final class Session {
     private final String playerId;
     private final String reconnectToken;
-    private final String username;
+    private volatile String playerName;
     private final AtomicReference<SessionState> state = new AtomicReference<>(SessionState.CONNECTED);
     private volatile Socket socket;
     private volatile String roomId;
     private volatile long lastHeartbeatNanos = System.nanoTime();
+    private volatile long lastActivityTime = System.currentTimeMillis();
     private volatile OutboundSender outboundSender;
     private volatile SessionState stateBeforeDisconnect;
 
-    public Session(String username, Socket socket) {
-        this(UUID.randomUUID().toString(), UUID.randomUUID().toString(), username, socket);
+    public Session(String playerName, Socket socket) {
+        this(UUID.randomUUID().toString(), UUID.randomUUID().toString(), playerName, socket);
     }
 
-    public Session(String playerId, String reconnectToken, String username, Socket socket) {
+    public Session(String playerId, String reconnectToken, String playerName, Socket socket) {
         this.playerId = requireText(playerId, "playerId");
         this.reconnectToken = requireText(reconnectToken, "reconnectToken");
-        this.username = requireText(username, "username");
+        this.playerName = requireText(playerName, "playerName");
         this.socket = Objects.requireNonNull(socket, "socket");
     }
 
     public String getPlayerId() { return playerId; }
     public String getReconnectToken() { return reconnectToken; }
-    public String getUsername() { return username; }
+    public String getPlayerName() { return playerName; }
+    public String getUsername() { return playerName; }
     public Socket getSocket() { return socket; }
     public String getRoomId() { return roomId; }
     public SessionState getState() { return state.get(); }
     public long getLastHeartbeatNanos() { return lastHeartbeatNanos; }
+    public long getLastActivityTime() { return lastActivityTime; }
     public OutboundSender getOutboundSender() { return outboundSender; }
+
+    public void setPlayerName(String playerName) {
+        this.playerName = requireText(playerName, "playerName");
+    }
 
     public void setRoomId(String roomId) { this.roomId = roomId; }
     public void setOutboundSender(OutboundSender sender) { this.outboundSender = sender; }
@@ -65,6 +72,11 @@ public final class Session {
 
     public void updateHeartbeat() {
         lastHeartbeatNanos = System.nanoTime();
+        lastActivityTime = System.currentTimeMillis();
+    }
+
+    public void recordActivity() {
+        updateHeartbeat();
     }
 
     public boolean isHeartbeatExpired(long timeoutNanos) {

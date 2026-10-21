@@ -1,5 +1,6 @@
 package com.bombit.server.integration;
 
+import com.bombit.common.protocol.PacketType;
 import com.bombit.server.network.ConnectionManager;
 import com.bombit.server.network.OutboundMessage;
 import com.bombit.server.network.OutboundSender;
@@ -10,7 +11,7 @@ import com.bombit.server.session.Session;
 import java.nio.charset.StandardCharsets;
 
 public final class RoomCleanupSessionListener implements SessionLifecycleListener {
-    public static final short PLAYER_DISCONNECTED_TYPE = 0x0032;
+    public static final short PLAYER_DISCONNECTED_TYPE = PacketType.PLAYER_DISCONNECTED;
 
     private final RoomManager roomManager;
     private final ConnectionManager connectionManager;

@@ -2,19 +2,22 @@ package com.bombit.server.session;
 
 import com.bombit.server.integration.SessionLifecycleListener;
 import com.bombit.server.network.BroadcastSender;
+import com.bombit.server.network.ClientSender;
 import com.bombit.server.network.OutboundMessage;
 import com.bombit.server.network.OutboundSender;
+import com.bombit.server.room.RoomBroadcaster;
 
 import java.net.Socket;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
-public final class SessionManager implements AutoCloseable {
+public final class SessionManager implements ClientSender, RoomBroadcaster, AutoCloseable {
     private final Map<String, Session> sessions = new ConcurrentHashMap<>();
     private final Map<String, ScheduledFuture<?>> disconnectTimers = new ConcurrentHashMap<>();
     private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(2);
@@ -31,12 +34,16 @@ public final class SessionManager implements AutoCloseable {
     }
 
     public void register(Session session) {
+        Objects.requireNonNull(session, "session");
         if (sessions.putIfAbsent(session.getPlayerId(), session) != null) {
             throw new IllegalStateException("Session already exists: " + session.getPlayerId());
         }
     }
 
     public Optional<Session> find(String playerId) {
+        if (playerId == null) {
+            return Optional.empty();
+        }
         return Optional.ofNullable(sessions.get(playerId));
     }
 
@@ -44,7 +51,14 @@ public final class SessionManager implements AutoCloseable {
         return Map.copyOf(sessions);
     }
 
+    public void disconnect(String playerId) {
+        handleGracefulDisconnect(playerId);
+    }
+
     public void handleUnexpectedDisconnect(String playerId) {
+        if (playerId == null) {
+            return;
+        }
         Session session = sessions.get(playerId);
         if (session == null || !markDisconnected(session)) {
             return;
@@ -62,6 +76,9 @@ public final class SessionManager implements AutoCloseable {
     }
 
     public void handleGracefulDisconnect(String playerId) {
+        if (playerId == null) {
+            return;
+        }
         Session session = sessions.remove(playerId);
         if (session == null) {
             return;
@@ -73,8 +90,12 @@ public final class SessionManager implements AutoCloseable {
     }
 
     public boolean reconnect(String playerId, String token, Socket newSocket) {
+        if (playerId == null || token == null) {
+            closeQuietly(newSocket);
+            return false;
+        }
         Session session = sessions.get(playerId);
-        if (session == null || token == null || !token.equals(session.getReconnectToken())
+        if (session == null || !token.equals(session.getReconnectToken())
                 || session.getState() != SessionState.DISCONNECTED) {
             closeQuietly(newSocket);
             return false;
@@ -93,6 +114,9 @@ public final class SessionManager implements AutoCloseable {
     }
 
     public void hardDrop(String playerId) {
+        if (playerId == null) {
+            return;
+        }
         Session session = sessions.remove(playerId);
         cancelDisconnectTimer(playerId);
         if (session == null) {
@@ -103,11 +127,32 @@ public final class SessionManager implements AutoCloseable {
         lifecycleListener.onPlayerHardDropped(session);
     }
 
-    public void broadcastToRoom(String roomId, OutboundMessage message) {
+    @Override
+    public void sendToPlayer(String playerId, OutboundMessage message) {
+        if (playerId == null || message == null) {
+            return;
+        }
+        Session session = sessions.get(playerId);
+        if (session != null && session.getState() != SessionState.DISCONNECTED
+                && session.getState() != SessionState.CLOSED) {
+            sender.send(session, message);
+        }
+    }
+
+    @Override
+    public void broadcast(String roomId, OutboundMessage message) {
+        broadcastExcept(roomId, null, message);
+    }
+
+    @Override
+    public void broadcastExcept(String roomId, String excludedPlayerId, OutboundMessage message) {
         if (roomId == null || message == null) {
             return;
         }
         for (Session session : sessions.values()) {
+            if (excludedPlayerId != null && excludedPlayerId.equals(session.getPlayerId())) {
+                continue;
+            }
             SessionState state = session.getState();
             if (roomId.equals(session.getRoomId())
                     && state != SessionState.DISCONNECTED
@@ -115,6 +160,10 @@ public final class SessionManager implements AutoCloseable {
                 sender.send(session, message);
             }
         }
+    }
+
+    public void broadcastToRoom(String roomId, OutboundMessage message) {
+        broadcast(roomId, message);
     }
 
     public int getOnlineCount() {
@@ -147,6 +196,9 @@ public final class SessionManager implements AutoCloseable {
     }
 
     private static void closeQuietly(Socket socket) {
+        if (socket == null) {
+            return;
+        }
         try {
             socket.close();
         } catch (java.io.IOException ignored) {

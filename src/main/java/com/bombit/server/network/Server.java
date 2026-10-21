@@ -1,6 +1,7 @@
 package com.bombit.server.network;
 
 import com.bombit.server.chat.ChatHandler;
+import com.bombit.server.dispatch.MessageRouter;
 import com.bombit.server.heartbeat.HeartbeatManager;
 import com.bombit.server.integration.RoomCleanupSessionListener;
 import com.bombit.server.integration.SessionLifecycleListener;
@@ -32,20 +33,30 @@ public final class Server implements AutoCloseable {
     private final SessionManager sessionManager;
     private final ChatHandler chatHandler;
     private final HeartbeatManager heartbeatManager;
+    private final MessageRouter messageRouter;
+    private final ServerPacketDispatcher packetDispatcher;
     private volatile boolean running;
 
-    public Server(int port) throws IOException {
+    public Server(int port, MessageRouter messageRouter) throws IOException {
         if (port < 0 || port > 65535) {
             throw new IllegalArgumentException("Invalid port");
         }
         this.serverSocket = new ServerSocket(port);
+        this.messageRouter = messageRouter != null ? messageRouter : new MessageRouter();
         BroadcastSender broadcastSender = new BroadcastSender();
         SessionLifecycleListener sessionListener = new RoomCleanupSessionListener(roomManager, connectionManager, broadcastSender);
         this.sessionManager = new SessionManager(sessionListener, RECONNECT_GRACE_SECONDS);
-        this.roomManager.setBroadcaster(sessionManager::broadcastToRoom);
+        this.roomManager.setBroadcaster(sessionManager);
         this.chatHandler = new ChatHandler(roomManager, broadcastSender, OUTBOUND_QUEUE_CAPACITY);
         this.heartbeatManager = new HeartbeatManager(
                 sessionManager, HEARTBEAT_TIMEOUT_SECONDS, TimeUnit.SECONDS, broadcastSender);
+        this.packetDispatcher = new ServerPacketDispatcher(
+                sessionManager, roomManager, chatHandler, heartbeatManager, sessionManager);
+        this.packetDispatcher.registerTo(this.messageRouter);
+    }
+
+    public Server(int port) throws IOException {
+        this(port, new MessageRouter());
     }
 
     public void start() throws IOException {
@@ -64,7 +75,7 @@ public final class Server implements AutoCloseable {
             sessionManager.register(session);
             connectionManager.open(session);
             try {
-                clientPool.execute(new ClientHandler(socket, session, sessionManager));
+                clientPool.execute(new ClientHandler(socket, session, sessionManager, messageRouter));
             } catch (RejectedExecutionException rejected) {
                 sessionManager.hardDrop(session.getPlayerId());
             }
@@ -77,6 +88,8 @@ public final class Server implements AutoCloseable {
     public ConnectionManager getConnectionManager() { return connectionManager; }
     public ChatHandler getChatHandler() { return chatHandler; }
     public HeartbeatManager getHeartbeatManager() { return heartbeatManager; }
+    public MessageRouter getMessageRouter() { return messageRouter; }
+    public ServerPacketDispatcher getPacketDispatcher() { return packetDispatcher; }
 
     @Override
     public void close() {

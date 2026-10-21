@@ -1,5 +1,6 @@
 package com.bombit.server.chat;
 
+import com.bombit.common.protocol.PacketType;
 import com.bombit.server.network.OutboundMessage;
 import com.bombit.server.network.OutboundSender;
 import com.bombit.server.room.Room;
@@ -12,7 +13,7 @@ import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 
 public final class ChatHandler implements AutoCloseable {
-    public static final short CHAT_MESSAGE_TYPE = 0x0050;
+    public static final short CHAT_MESSAGE_TYPE = PacketType.CHAT;
 
     private final RoomManager roomManager;
     private final OutboundSender sender;
@@ -40,8 +41,9 @@ public final class ChatHandler implements AutoCloseable {
                 if (room == null) {
                     continue;
                 }
-                byte[] payload = ("[" + message.senderName() + "]: " + message.message())
-                        .getBytes(StandardCharsets.UTF_8);
+                String json = "{\"sender\":\"" + escapeJson(message.senderName())
+                        + "\",\"text\":\"" + escapeJson(message.message()) + "\"}";
+                byte[] payload = json.getBytes(StandardCharsets.UTF_8);
                 for (Session session : room.getPlayersSnapshot()) {
                     if (session.getState() != SessionState.DISCONNECTED
                             && session.getState() != SessionState.CLOSED
@@ -54,6 +56,13 @@ public final class ChatHandler implements AutoCloseable {
                 break;
             }
         }
+    }
+
+    private static String escapeJson(String value) {
+        if (value == null) {
+            return "";
+        }
+        return value.replace("\\", "\\\\").replace("\"", "\\\"");
     }
 
     @Override

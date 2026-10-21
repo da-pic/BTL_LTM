@@ -1,5 +1,6 @@
 package com.bombit.server.room;
 
+import com.bombit.common.protocol.PacketType;
 import com.bombit.server.network.OutboundMessage;
 import com.bombit.server.session.Session;
 import com.bombit.server.session.SessionState;
@@ -13,12 +14,15 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 public final class RoomManager {
-    public static final short ROOM_STATE_TYPE = 0x0012;
-    public static final short GAME_STARTED_TYPE = 0x0015;
+    public static final short ROOM_STATE_TYPE = PacketType.ROOM_STATE;
+    public static final short GAME_STARTED_TYPE = PacketType.GAME_STARTED;
 
     private final Map<String, Room> rooms = new ConcurrentHashMap<>();
     private final int maxPlayersPerRoom;
-    private volatile RoomBroadcaster broadcaster = (roomId, message) -> { };
+    private volatile RoomBroadcaster broadcaster = new RoomBroadcaster() {
+        @Override public void broadcast(String roomId, OutboundMessage message) {}
+        @Override public void broadcastExcept(String roomId, String excludedPlayerId, OutboundMessage message) {}
+    };
 
     public RoomManager(int maxPlayersPerRoom) {
         if (maxPlayersPerRoom < 2) {
@@ -32,7 +36,12 @@ public final class RoomManager {
     }
 
     public Room createRoom(String roomName, Session host) {
-        requireAvailable(host);
+        if (host == null || host.getRoomId() != null) {
+            throw new IllegalStateException("Session already belongs to a room");
+        }
+        if (host.getState() != SessionState.IN_LOBBY && host.getState() != SessionState.CONNECTED) {
+            throw new IllegalStateException("Session cannot create a room from " + host.getState());
+        }
         String roomId = UUID.randomUUID().toString();
         Room room = new Room(roomId, roomName, maxPlayersPerRoom, host);
         rooms.put(roomId, room);
@@ -43,7 +52,12 @@ public final class RoomManager {
     }
 
     public boolean joinRoom(String roomId, Session player) {
-        requireAvailable(player);
+        if (player == null || roomId == null || player.getRoomId() != null) {
+            return false;
+        }
+        if (player.getState() != SessionState.IN_LOBBY && player.getState() != SessionState.CONNECTED) {
+            return false;
+        }
         Room room = rooms.get(roomId);
         if (room == null) {
             return false;
@@ -60,6 +74,9 @@ public final class RoomManager {
     }
 
     public void leaveRoom(Session player) {
+        if (player == null) {
+            return;
+        }
         String roomId = player.getRoomId();
         if (roomId == null) {
             return;
@@ -81,6 +98,9 @@ public final class RoomManager {
     }
 
     public Optional<SessionState> toggleReady(Session player) {
+        if (player == null) {
+            return Optional.empty();
+        }
         String roomId = player.getRoomId();
         if (roomId == null) {
             return Optional.empty();
@@ -109,6 +129,9 @@ public final class RoomManager {
     }
 
     public Optional<Room> startGame(Session requester) {
+        if (requester == null) {
+            return Optional.empty();
+        }
         String roomId = requester.getRoomId();
         if (roomId == null) {
             return Optional.empty();
@@ -134,7 +157,10 @@ public final class RoomManager {
     public Room find(String roomId) { return rooms.get(roomId); }
     public Map<String, Room> snapshot() { return Map.copyOf(rooms); }
 
-    private void publishRoomState(Room room) {
+    public void publishRoomState(Room room) {
+        if (room == null) {
+            return;
+        }
         broadcaster.broadcast(room.getRoomId(),
                 new OutboundMessage(ROOM_STATE_TYPE, buildRoomStatePayload(room)));
     }
@@ -154,6 +180,7 @@ public final class RoomManager {
             }
             json.append("{\"playerId\":\"").append(player.getPlayerId()).append("\",");
             json.append("\"username\":\"").append(escapeJson(player.getUsername())).append("\",");
+            json.append("\"playerName\":\"").append(escapeJson(player.getPlayerName())).append("\",");
             json.append("\"state\":\"").append(player.getState()).append("\"}");
         }
         json.append("]}");
@@ -170,7 +197,8 @@ public final class RoomManager {
                 json.append(',');
             }
             json.append("{\"playerId\":\"").append(player.getPlayerId()).append("\",");
-            json.append("\"username\":\"").append(escapeJson(player.getUsername())).append("\"}");
+            json.append("\"username\":\"").append(escapeJson(player.getUsername())).append("\",");
+            json.append("\"playerName\":\"").append(escapeJson(player.getPlayerName())).append("\"}");
         }
         json.append("]}");
         return json.toString().getBytes(StandardCharsets.UTF_8);
@@ -181,15 +209,5 @@ public final class RoomManager {
             return "";
         }
         return value.replace("\\", "\\\\").replace("\"", "\\\"");
-    }
-
-    private static void requireAvailable(Session session) {
-        if (session.getRoomId() != null) {
-            throw new IllegalStateException("Session already belongs to a room");
-        }
-        if (session.getState() != SessionState.IN_LOBBY
-                && session.getState() != SessionState.CONNECTED) {
-            throw new IllegalStateException("Session cannot join a room from " + session.getState());
-        }
     }
 }

@@ -18,8 +18,8 @@ public final class Room {
     private State state = State.WAITING;
 
     public Room(String roomId, String roomName, int maxPlayers, Session host) {
-        this.roomId = Objects.requireNonNull(roomId);
-        this.roomName = Objects.requireNonNull(roomName);
+        this.roomId = Objects.requireNonNull(roomId, "roomId");
+        this.roomName = Objects.requireNonNull(roomName, "roomName");
         if (maxPlayers < 2) {
             throw new IllegalArgumentException("A room needs at least two slots");
         }
@@ -28,9 +28,19 @@ public final class Room {
         players.add(host);
     }
 
+    public synchronized boolean isFull() {
+        return players.size() >= maxPlayers;
+    }
+
+    public synchronized boolean hasPlayer(String playerId) {
+        if (playerId == null) {
+            return false;
+        }
+        return players.stream().anyMatch(p -> playerId.equals(p.getPlayerId()));
+    }
+
     public synchronized boolean addPlayer(Session session) {
-        if (state != State.WAITING || players.size() >= maxPlayers
-                || players.stream().anyMatch(p -> p.getPlayerId().equals(session.getPlayerId()))) {
+        if (session == null || state != State.WAITING || isFull() || hasPlayer(session.getPlayerId())) {
             return false;
         }
         players.add(session);
@@ -38,6 +48,9 @@ public final class Room {
     }
 
     public synchronized boolean removePlayer(String playerId) {
+        if (playerId == null) {
+            return false;
+        }
         boolean removed = players.removeIf(player -> player.getPlayerId().equals(playerId));
         if (removed && playerId.equals(hostPlayerId) && !players.isEmpty()) {
             hostPlayerId = players.get(0).getPlayerId();
@@ -59,7 +72,7 @@ public final class Room {
     }
 
     public synchronized void setState(State state) {
-        this.state = Objects.requireNonNull(state);
+        this.state = Objects.requireNonNull(state, "state");
     }
 
     public String getRoomId() { return roomId; }

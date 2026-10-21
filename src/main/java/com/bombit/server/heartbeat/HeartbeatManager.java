@@ -1,5 +1,6 @@
 package com.bombit.server.heartbeat;
 
+import com.bombit.common.protocol.PacketType;
 import com.bombit.server.network.OutboundMessage;
 import com.bombit.server.network.OutboundSender;
 import com.bombit.server.session.Session;
@@ -12,7 +13,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 public final class HeartbeatManager implements AutoCloseable {
-    public static final short PONG_TYPE = 0x0041;
+    public static final short PONG_TYPE = PacketType.PONG;
 
     private static final long SWEEP_INTERVAL_SECONDS = 2;
     private static final byte[] EMPTY_JSON = "{}".getBytes(StandardCharsets.UTF_8);
@@ -33,6 +34,9 @@ public final class HeartbeatManager implements AutoCloseable {
     }
 
     public void onPing(Session session, byte[] pingPayload) {
+        if (session == null) {
+            return;
+        }
         session.updateHeartbeat();
         byte[] pongPayload = pingPayload == null || pingPayload.length == 0
                 ? EMPTY_JSON
@@ -40,9 +44,10 @@ public final class HeartbeatManager implements AutoCloseable {
         sender.send(session, new OutboundMessage(PONG_TYPE, pongPayload));
     }
 
-    private void sweep() {
+    public void sweep() {
         for (Session session : sessionManager.snapshot().values()) {
             if (session.getState() != SessionState.DISCONNECTED
+                    && session.getState() != SessionState.CLOSED
                     && session.isHeartbeatExpired(timeoutNanos)) {
                 sessionManager.handleUnexpectedDisconnect(session.getPlayerId());
             }
