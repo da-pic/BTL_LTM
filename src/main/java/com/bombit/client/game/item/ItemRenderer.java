@@ -46,6 +46,9 @@ public final class ItemRenderer {
                 case BOMB_UP -> drawBombIcon(g, x, y, size);
                 case FIRE_UP -> drawFireIcon(g, x, y, size);
                 case SPEED_UP -> drawSpeedIcon(g, x, y, size);
+                case LIFE_UP -> drawHeartIcon(g,x,y,size);
+                case SHIELD -> drawShieldIcon(g,x,y,size);
+                default -> {g.setColor(Color.WHITE);g.drawString("?",(int)(x+size*.4),(int)(y+size*.6));}
             }
             drawPlus(g, x, y, size, theme);
         } finally {
@@ -65,34 +68,35 @@ public final class ItemRenderer {
     }
 
     private void drawFireIcon(Graphics2D g, double x, double y, double size) {
-        Path2D flame = new Path2D.Double();
-        flame.moveTo(x + size * 0.50, y + size * 0.16);
-        flame.curveTo(x + size * 0.70, y + size * 0.38, x + size * 0.76, y + size * 0.57,
-                x + size * 0.61, y + size * 0.78);
-        flame.curveTo(x + size * 0.54, y + size * 0.86, x + size * 0.36, y + size * 0.82,
-                x + size * 0.29, y + size * 0.67);
-        flame.curveTo(x + size * 0.20, y + size * 0.48, x + size * 0.39, y + size * 0.37,
-                x + size * 0.50, y + size * 0.16);
-        g.setColor(new Color(255, 92, 22));
-        g.fill(flame);
-        g.setColor(new Color(255, 224, 80));
-        g.fill(new Ellipse2D.Double(x + size * 0.42, y + size * 0.53, size * 0.18, size * 0.22));
+        g.setColor(new Color(210,225,240));
+        g.fill(new RoundRectangle2D.Double(x+size*.38,y+size*.14,size*.24,size*.17,size*.05,size*.05));
+        g.setColor(new Color(255,159,35));
+        g.fill(new RoundRectangle2D.Double(x+size*.27,y+size*.31,size*.46,size*.5,size*.12,size*.12));
+        g.setColor(new Color(255,239,130));
+        g.fill(new RoundRectangle2D.Double(x+size*.34,y+size*.42,size*.32,size*.23,size*.05,size*.05));
     }
 
     private void drawSpeedIcon(Graphics2D g, double x, double y, double size) {
-        Path2D bolt = new Path2D.Double();
-        bolt.moveTo(x + size * 0.56, y + size * 0.14);
-        bolt.lineTo(x + size * 0.30, y + size * 0.54);
-        bolt.lineTo(x + size * 0.47, y + size * 0.54);
-        bolt.lineTo(x + size * 0.38, y + size * 0.84);
-        bolt.lineTo(x + size * 0.73, y + size * 0.40);
-        bolt.lineTo(x + size * 0.54, y + size * 0.40);
-        bolt.closePath();
-        g.setColor(new Color(91, 224, 255));
-        g.fill(bolt);
-        g.setColor(new Color(213, 251, 255));
-        g.setStroke(new BasicStroke(Math.max(1f, (float) size * 0.035f)));
-        g.draw(bolt);
+        for(int n=0;n<2;n++){
+            double sx=x+size*(.17+n*.27),sy=y+size*(.25+n*.23);
+            Path2D shoe=new Path2D.Double();shoe.moveTo(sx,sy);shoe.lineTo(sx+size*.18,sy);
+            shoe.lineTo(sx+size*.2,sy+size*.15);shoe.lineTo(sx+size*.38,sy+size*.2);
+            shoe.lineTo(sx+size*.38,sy+size*.3);shoe.lineTo(sx,sy+size*.3);shoe.closePath();
+            g.setColor(new Color(91,224,255));g.fill(shoe);g.setColor(Color.WHITE);g.draw(shoe);
+        }
+    }
+
+    private void drawHeartIcon(Graphics2D g,double x,double y,double s){
+        Path2D p=new Path2D.Double();p.moveTo(x+s*.5,y+s*.8);
+        p.curveTo(x+s*.02,y+s*.48,x+s*.2,y+s*.12,x+s*.5,y+s*.35);
+        p.curveTo(x+s*.8,y+s*.12,x+s*.98,y+s*.48,x+s*.5,y+s*.8);
+        g.setColor(new Color(255,85,123));g.fill(p);
+    }
+    private void drawShieldIcon(Graphics2D g,double x,double y,double s){
+        Path2D p=new Path2D.Double();p.moveTo(x+s*.23,y+s*.25);p.lineTo(x+s*.5,y+s*.16);
+        p.lineTo(x+s*.77,y+s*.25);p.curveTo(x+s*.77,y+s*.62,x+s*.65,y+s*.74,x+s*.5,y+s*.84);
+        p.curveTo(x+s*.35,y+s*.74,x+s*.23,y+s*.62,x+s*.23,y+s*.25);
+        g.setColor(new Color(115,165,255));g.fill(p);g.setColor(Color.WHITE);g.draw(p);
     }
 
     private void drawPlus(Graphics2D g, double x, double y, double size, Color theme) {
@@ -113,6 +117,9 @@ public final class ItemRenderer {
             case BOMB_UP -> new Color(189, 199, 218);
             case FIRE_UP -> new Color(255, 107, 38);
             case SPEED_UP -> new Color(47, 199, 231);
+            case LIFE_UP -> new Color(255,85,123);
+            case SHIELD -> new Color(115,165,255);
+            default -> Color.LIGHT_GRAY;
         };
     }
 }

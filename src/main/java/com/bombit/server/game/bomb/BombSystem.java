@@ -1,5 +1,9 @@
 package com.bombit.server.game.bomb;
 
+import com.bombit.server.game.model.TilePosition;
+import com.bombit.server.game.model.TileType;
+import com.bombit.server.game.model.Direction;
+
 import com.bombit.server.game.event.BlockDestroyedEvent;
 import com.bombit.server.game.event.BombExplodedEvent;
 import com.bombit.server.game.event.BombPlacedEvent;
@@ -8,6 +12,7 @@ import com.bombit.server.game.event.PlayerDiedEvent;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -77,6 +82,11 @@ public final class BombSystem {
     }
 
     public ExplosionResult explodeBomb(int bombId, long nowMillis, BombWorld world) {
+        return explodeBombs(List.of(bombId), nowMillis, world);
+    }
+
+    /** One tick's roots share block barriers, including all recursively chained bombs. */
+    public ExplosionResult explodeBombs(Collection<Integer> bombIds, long nowMillis, BombWorld world) {
         Objects.requireNonNull(world);
         Queue<Bomb> pending = new ArrayDeque<>();
         Set<Integer> processedBombIds = new HashSet<>();
@@ -84,8 +94,9 @@ public final class BombSystem {
         Set<TilePosition> affectedCells = new LinkedHashSet<>();
         Set<TilePosition> destroyedBlocks = new LinkedHashSet<>();
         Set<String> killedPlayerIds = new LinkedHashSet<>();
+        java.util.Map<String,String> hits=new java.util.LinkedHashMap<>();
 
-        world.bombById(bombId).ifPresent(pending::add);
+        for (int bombId : bombIds) world.bombById(bombId).ifPresent(pending::add);
         while (!pending.isEmpty()) {
             Bomb bomb = pending.remove();
             if (!processedBombIds.add(bomb.id()) || !bomb.markExploded()) {
@@ -104,15 +115,20 @@ public final class BombSystem {
                     }
                 });
                 for (String playerId : world.alivePlayersAt(cell)) {
-                    if (killedPlayerIds.add(playerId)) {
-                        world.killPlayer(playerId, bomb.ownerPlayerId());
-                        eventSink.publish(new PlayerDiedEvent(nowMillis, playerId, bomb.ownerPlayerId(), "EXPLOSION"));
-                    }
+                    hits.putIfAbsent(playerId,bomb.ownerPlayerId());
                 }
             }
             eventSink.publish(new BombExplodedEvent(nowMillis, bomb.id(), bomb.position(), Set.copyOf(bombCells)));
         }
 
+        // Resolve once after all rays: a respawn cannot be hit again by this same explosion batch.
+        hits.forEach((playerId,killer)->{
+            world.damagePlayer(playerId,killer);
+            if(!world.isPlayerAlive(playerId)){
+                killedPlayerIds.add(playerId);
+                eventSink.publish(new PlayerDiedEvent(nowMillis,playerId,killer,"EXPLOSION"));
+            }
+        });
         for (TilePosition block : destroyedBlocks) {
             eventSink.publish(new BlockDestroyedEvent(nowMillis, block));
         }
@@ -133,7 +149,8 @@ public final class BombSystem {
         for (Direction direction : Direction.values()) {
             for (int distance = 1; distance <= bomb.range(); distance++) {
                 TilePosition position = bomb.position().move(direction, distance);
-                TileType tileType = world.tileType(position);
+                // A block destroyed earlier in this batch still stops every ray in the same batch.
+                TileType tileType = destroyedBlocks.contains(position) ? TileType.BREAKABLE_BLOCK : world.tileType(position);
                 if (tileType == TileType.HARD_WALL || tileType == TileType.OUT_OF_BOUNDS) {
                     break;
                 }

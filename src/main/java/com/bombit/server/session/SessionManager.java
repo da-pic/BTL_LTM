@@ -13,14 +13,20 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
 
 public final class SessionManager implements AutoCloseable {
     private final Map<String, Session> sessions = new ConcurrentHashMap<>();
     private final Map<String, ScheduledFuture<?>> disconnectTimers = new ConcurrentHashMap<>();
-    private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(2);
+    private final ScheduledThreadPoolExecutor scheduler = new ScheduledThreadPoolExecutor(2,r->new Thread(r,"session-expiry"));
+    private final AtomicReference<Throwable> failure=new AtomicReference<>();
     private final GameEventSink gameEventSink;
     private final long reconnectGraceSeconds;
     private final OutboundSender sender = new BroadcastSender();
+    private final AtomicBoolean closed = new AtomicBoolean();
 
     public SessionManager(GameEventSink gameEventSink, long reconnectGraceSeconds) {
         if (reconnectGraceSeconds <= 0) {
@@ -28,9 +34,11 @@ public final class SessionManager implements AutoCloseable {
         }
         this.gameEventSink = gameEventSink;
         this.reconnectGraceSeconds = reconnectGraceSeconds;
+        scheduler.setRemoveOnCancelPolicy(true);
     }
 
-    public void register(Session session) {
+    public synchronized void register(Session session) {
+        if (closed.get()) throw new IllegalStateException("Session manager closed");
         if (sessions.putIfAbsent(session.getPlayerId(), session) != null) {
             throw new IllegalStateException("Session already exists: " + session.getPlayerId());
         }
@@ -45,20 +53,25 @@ public final class SessionManager implements AutoCloseable {
     }
 
     public void handleUnexpectedDisconnect(String playerId) {
+        if (closed.get()) { hardDrop(playerId); return; }
         Session session = sessions.get(playerId);
         if (session == null || !markDisconnected(session)) {
             return;
         }
         session.closeSocket();
-        gameEventSink.onPlayerDisconnected(session);
-        ScheduledFuture<?> timer = scheduler.schedule(
-                () -> hardDrop(playerId),
-                reconnectGraceSeconds,
-                TimeUnit.SECONDS);
+        notifySafely(()->gameEventSink.onPlayerDisconnected(session));
+        ScheduledFuture<?> timer;
+        try {
+            timer = scheduler.schedule(() -> hardDrop(playerId), reconnectGraceSeconds, TimeUnit.SECONDS);
+        } catch (RejectedExecutionException shuttingDown) {
+            hardDrop(playerId);
+            return;
+        }
         ScheduledFuture<?> previous = disconnectTimers.put(playerId, timer);
         if (previous != null) {
             previous.cancel(false);
         }
+        if (closed.get() || session.getState() != SessionState.DISCONNECTED) cancelDisconnectTimer(playerId);
     }
 
     public void handleGracefulDisconnect(String playerId) {
@@ -69,10 +82,11 @@ public final class SessionManager implements AutoCloseable {
         cancelDisconnectTimer(playerId);
         session.setState(SessionState.CLOSED);
         session.closeSocket();
-        gameEventSink.onPlayerHardDropped(session);
+        notifySafely(()->gameEventSink.onPlayerHardDropped(session));
     }
 
     public boolean reconnect(String playerId, String token, Socket newSocket) {
+        if (closed.get()) { closeQuietly(newSocket); return false; }
         Session session = sessions.get(playerId);
         if (session == null || token == null || !token.equals(session.getReconnectToken())
                 || session.getState() != SessionState.DISCONNECTED) {
@@ -88,7 +102,7 @@ public final class SessionManager implements AutoCloseable {
             session.attachSocket(newSocket);
             session.restoreStateAfterReconnect(SessionState.PLAYING);
         }
-        gameEventSink.onPlayerReconnected(session);
+        notifySafely(()->gameEventSink.onPlayerReconnected(session));
         return true;
     }
 
@@ -100,7 +114,7 @@ public final class SessionManager implements AutoCloseable {
         }
         session.setState(SessionState.CLOSED);
         session.closeSocket();
-        gameEventSink.onPlayerHardDropped(session);
+        notifySafely(()->gameEventSink.onPlayerHardDropped(session));
     }
 
     public void broadcastToRoom(String roomId, OutboundMessage message) {
@@ -112,7 +126,7 @@ public final class SessionManager implements AutoCloseable {
             if (roomId.equals(session.getRoomId())
                     && state != SessionState.DISCONNECTED
                     && state != SessionState.CLOSED) {
-                sender.send(session, message);
+                try{sender.send(session,message);}catch(RuntimeException e){failure.compareAndSet(null,e);}
             }
         }
     }
@@ -153,12 +167,19 @@ public final class SessionManager implements AutoCloseable {
             // The rejected socket is no longer owned by the server.
         }
     }
+    private void notifySafely(Runnable callback){try{callback.run();}catch(RuntimeException e){failure.compareAndSet(null,e);}}
+    public Optional<Throwable> failure(){return Optional.ofNullable(failure.get());}
+    public int pendingDisconnectTimers(){return disconnectTimers.size();}
+    public boolean isTerminated(){return scheduler.isTerminated();}
 
     @Override
     public void close() {
+        synchronized(this){if (!closed.compareAndSet(false, true)) return;}
         for (String playerId : sessions.keySet()) {
             hardDrop(playerId);
         }
         scheduler.shutdownNow();
+        disconnectTimers.clear();
+        try{scheduler.awaitTermination(1,TimeUnit.SECONDS);}catch(InterruptedException e){Thread.currentThread().interrupt();}
     }
 }

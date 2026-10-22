@@ -1,6 +1,6 @@
 package com.bombit.client.game.bomb;
 
-import com.bombit.server.game.bomb.TilePosition;
+import com.bombit.server.game.model.TilePosition;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;

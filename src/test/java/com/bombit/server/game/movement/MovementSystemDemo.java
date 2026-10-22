@@ -1,12 +1,22 @@
 package com.bombit.server.game.movement;
 
+import com.bombit.server.game.core.StopMovingCommand;
+import com.bombit.server.game.core.MoveCommand;
+import com.bombit.server.game.model.TileType;
+import com.bombit.server.game.model.Direction;
 import com.bombit.server.game.core.GameCommand;
 import com.bombit.server.game.core.GameMap;
 import com.bombit.server.game.core.GameState;
 import com.bombit.server.game.core.Player;
 
+/**
+ * Demo movement và va chạm với tường, block, biên map và lệnh dừng.
+ * Gọi update bằng deltaTime mô phỏng để quan sát quãng đường theo tốc độ.
+ * Không dùng socket; dữ liệu in console giúp kiểm tra thủ công từng tình huống.
+ */
 public class MovementSystemDemo {
 
+    // Mục đích: Chạy các bước kiểm tra của MovementSystemDemo; xem chú thích tại từng kịch bản và kết quả console.
     public static void main(String[] args) {
 
         // 1. Tao map 8 cot, 6 hang; moi tile 32 pixel
@@ -14,28 +24,28 @@ public class MovementSystemDemo {
 
         // 2. Tao tuong bao quanh map
         for (int x = 0; x < map.getWidthInTiles(); x++) {
-            map.setTile(x, 0, GameMap.TileType.HARD_WALL);
+            map.setTile(x, 0, TileType.HARD_WALL);
             map.setTile(
                     x,
                     map.getHeightInTiles() - 1,
-                    GameMap.TileType.HARD_WALL
+                    TileType.HARD_WALL
             );
         }
 
         for (int y = 0; y < map.getHeightInTiles(); y++) {
-            map.setTile(0, y, GameMap.TileType.HARD_WALL);
+            map.setTile(0, y, TileType.HARD_WALL);
             map.setTile(
                     map.getWidthInTiles() - 1,
                     y,
-                    GameMap.TileType.HARD_WALL
+                    TileType.HARD_WALL
             );
         }
 
         // Tuong cung nam tai cot 3, hang 2
-        map.setTile(3, 2, GameMap.TileType.HARD_WALL);
+        map.setTile(3, 2, TileType.HARD_WALL);
 
         // Block co the pha tai cot 3, hang 3
-        map.setTile(3, 3, GameMap.TileType.BREAKABLE_BLOCK);
+        map.setTile(3, 3, TileType.BREAKABLE_BLOCK);
 
         // 3. Tao hai Player
         Player p1 = new Player(1, 32, 64, 24, 24, 150);
@@ -74,8 +84,7 @@ public class MovementSystemDemo {
 
         movement.applyCommand(
                 state,
-                new GameCommand(
-                        1, Player.Direction.RIGHT, true)
+                new MoveCommand(1, Direction.RIGHT)
         );
 
         for (int i = 0; i < 10; i++) {
@@ -91,8 +100,7 @@ public class MovementSystemDemo {
 
         movement.applyCommand(
                 state,
-                new GameCommand(
-                        2, Player.Direction.RIGHT, true)
+                new MoveCommand(2, Direction.RIGHT)
         );
 
         for (int i = 0; i < 10; i++) {
@@ -118,8 +126,7 @@ public class MovementSystemDemo {
 
         movement.applyCommand(
                 state,
-                new GameCommand(
-                        2, Player.Direction.RIGHT, false)
+                new StopMovingCommand(2, Direction.RIGHT, 0)
         );
 
         double oldX = p2.getX();

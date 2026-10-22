@@ -1,5 +1,13 @@
 # Phân quyền sở hữu module
 
+Danh sách từng file và nhật ký cập nhật khi triển khai được theo dõi tại
+[FILE_OWNERSHIP_NOTES.md](FILE_OWNERSHIP_NOTES.md).
+
+Baseline M0 và bàn giao tích hợp: [M0_INTEGRATION_CONTRACT.md](M0_INTEGRATION_CONTRACT.md).
+Theo lộ trình Codex hỗ trợ hiện tại, TV4 giữ bootstrap/điều hướng/worker tích hợp;
+TV1 giữ lobby view/controller; TV2 giữ gameplay window và world adapter; TV3 giữ extension/hiệu ứng.
+Đây là phân công triển khai, không phải xác nhận tác giả lịch sử hoặc biên bản nhóm đã biểu quyết.
+
 ## TV1 — Network / Session / Room
 - `server/network`: server socket, client handler, connection lifecycle.
 - `server/session`: player session, trạng thái kết nối.

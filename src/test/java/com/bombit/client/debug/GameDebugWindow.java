@@ -1,6 +1,10 @@
 package com.bombit.client.debug;
 
 import com.bombit.server.game.core.GameCommand;
+import com.bombit.server.game.core.MoveCommand;
+import com.bombit.server.game.core.StopMovingCommand;
+import com.bombit.server.game.model.Direction;
+import com.bombit.server.game.model.TileType;
 import com.bombit.server.game.core.GameLoop;
 import com.bombit.server.game.core.GameMap;
 import com.bombit.server.game.core.GameState;
@@ -15,15 +19,22 @@ import java.awt.event.WindowEvent;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
+/**
+ * Giao diện Swing kiểm tra movement và full/delta trong cùng tiến trình.
+ * GameLoop chạy nền; Swing Timer đọc queue không chặn và áp dụng update trên EDT.
+ * Dữ liệu đi qua codec để kiểm tra encode/decode nhưng chưa truyền TCP.
+ * Phím điều khiển Player 1; panel chỉ render bản sao client, không đọc Player mutable của server.
+ */
 public class GameDebugWindow extends JFrame {
 
     private final GameLoop gameLoop;
     private final DebugPanel debugPanel;
     private final Timer pollTimer;
 
-    private Player.Direction activeDirection;
+    private Direction activeDirection;
     private boolean moving;
 
+    // Mục đích: Khởi tạo GameDebugWindow và kiểm tra dữ liệu đầu vào; xem chú thích của lớp để biết đơn vị và trách nhiệm.
     public GameDebugWindow(GameLoop gameLoop) {
         super("Bomb It - Local Debug UI");
 
@@ -52,6 +63,7 @@ public class GameDebugWindow extends JFrame {
 
             while ((update = gameLoop.pollOutboundUpdate()) != null) {
                 debugPanel.applyUpdate(update);
+                if (debugPanel.replica.needsFullState()) gameLoop.requestFullState();
             }
 
             debugPanel.repaint();
@@ -75,16 +87,18 @@ public class GameDebugWindow extends JFrame {
         setLocationRelativeTo(null);
     }
 
+    // Mục đích: Đăng ký các hướng bằng Swing key bindings, tách thao tác bàn phím khỏi logic movement server.
     private void setupControls() {
-        bindDirection("UP", Player.Direction.UP);
-        bindDirection("DOWN", Player.Direction.DOWN);
-        bindDirection("LEFT", Player.Direction.LEFT);
-        bindDirection("RIGHT", Player.Direction.RIGHT);
+        bindDirection("UP", Direction.UP);
+        bindDirection("DOWN", Direction.DOWN);
+        bindDirection("LEFT", Direction.LEFT);
+        bindDirection("RIGHT", Direction.RIGHT);
     }
 
+    // Mục đích: Ánh xạ sự kiện nhấn và nhả riêng cho một phím; WHEN_IN_FOCUSED_WINDOW nhận phím khi cửa sổ có focus.
     private void bindDirection(
             String keyName,
-            Player.Direction direction) {
+            Direction direction) {
 
         InputMap inputMap = getRootPane().getInputMap(
                 JComponent.WHEN_IN_FOCUSED_WINDOW);
@@ -117,15 +131,15 @@ public class GameDebugWindow extends JFrame {
         });
     }
 
-    private void startMoving(Player.Direction direction) {
+    // Mục đích: Bỏ sự kiện lặp của cùng hướng và chỉ đổi trạng thái input local khi queue nhận command thành công.
+    private void startMoving(Direction direction) {
 
         // Bo qua su kien lap khi phim van dang duoc nhan.
         if (moving && activeDirection == direction) {
             return;
         }
 
-        GameCommand command = new GameCommand(
-                1, direction, true);
+        GameCommand command = new MoveCommand(1, direction);
 
         if (gameLoop.submitCommand(command)) {
             activeDirection = direction;
@@ -139,15 +153,15 @@ public class GameDebugWindow extends JFrame {
         }
     }
 
-    private void stopMoving(Player.Direction direction) {
+    // Mục đích: Bỏ sự kiện nhả phím hướng cũ sau khi đổi hướng. Nếu queue từ chối STOP, bản demo chỉ báo lỗi; tích hợp thật cần cơ chế xử lý tiếp.
+    private void stopMoving(Direction direction) {
 
         // Neu da chuyen huong, bo qua su kien nha phim cu.
         if (!moving || activeDirection != direction) {
             return;
         }
 
-        GameCommand command = new GameCommand(
-                1, direction, false);
+        GameCommand command = new StopMovingCommand(1, direction, 0);
 
         if (gameLoop.submitCommand(command)) {
             moving = false;
@@ -159,12 +173,14 @@ public class GameDebugWindow extends JFrame {
         }
     }
 
+    // Mục đích: Dừng timer trước, dừng/join loop rồi đóng cửa sổ để không còn callback đọc queue sau khi thoát.
     private void shutdown() {
         pollTimer.stop();
         gameLoop.stop();
         dispose();
     }
 
+    // Mục đích: Khởi tạo demo Swing trên EDT; tạo GameState trước khi start loop. Đây là điểm chạy local để quan sát input và đồng bộ.
     public static void main(String[] args) {
 
         SwingUtilities.invokeLater(() -> {
@@ -182,8 +198,12 @@ public class GameDebugWindow extends JFrame {
             Player p2 = new Player(
                     2, 256, 128, 24, 24, 150);
 
+             Player p3 = new Player(
+                    3, 32, 128, 24, 24, 150);
+
             state.addPlayer(p1);
             state.addPlayer(p2);
+            state.addPlayer(p3);
 
             state.startMatch();
 
@@ -197,35 +217,39 @@ public class GameDebugWindow extends JFrame {
         });
     }
 
+    // Mục đích: Tạo map cố định có tường biên, tường giữa và block để thử va chạm bằng bàn phím.
     private static GameMap createTestMap() {
 
         GameMap map = new GameMap(17, 15, 32);
 
         // Tuong bao quanh ban do.
         for (int x = 0; x < map.getWidthInTiles(); x++) {
-            map.setTile(x, 0, GameMap.TileType.HARD_WALL);
+            map.setTile(x, 0, TileType.HARD_WALL);
 
             map.setTile(
                     x,
                     map.getHeightInTiles() - 1,
-                    GameMap.TileType.HARD_WALL);
+                    TileType.HARD_WALL);
         }
 
         for (int y = 0; y < map.getHeightInTiles(); y++) {
-            map.setTile(0, y, GameMap.TileType.HARD_WALL);
+            map.setTile(0, y, TileType.HARD_WALL);
 
             map.setTile(
                     map.getWidthInTiles() - 1,
                     y,
-                    GameMap.TileType.HARD_WALL);
+                    TileType.HARD_WALL);
         }
 
         // Mot block co the pha.
-        map.setTile(4, 2, GameMap.TileType.BREAKABLE_BLOCK);
+        map.setTile(4, 2, TileType.BREAKABLE_BLOCK);
+        map.setTile(5, 3, TileType.BREAKABLE_BLOCK);
+        map.setTile(9, 1, TileType.BREAKABLE_BLOCK);
+        map.setTile(13, 5, TileType.BREAKABLE_BLOCK);
 
         // Tuong cung o giua ban do.
         for (int y = 2; y <= 5; y++) {
-            map.setTile(6, y, GameMap.TileType.HARD_WALL);
+            map.setTile(6, y, TileType.HARD_WALL);
         }
 
         return map;
@@ -234,11 +258,14 @@ public class GameDebugWindow extends JFrame {
     // Trang thai hien thi doc lap, chi duoc cap nhat tren EDT.
     private static class DebugPanel extends JPanel {
 
+        private final com.bombit.client.game.movement.ClientWorldState replica =
+                new com.bombit.client.game.movement.ClientWorldState();
+
         private int mapWidth;
         private int mapHeight;
         private int tileSize;
 
-        private GameMap.TileType[][] tiles;
+        private TileType[][] tiles;
 
         private final Map<Integer, GameStateUpdate.PlayerData> players =
                 new LinkedHashMap<>();
@@ -270,130 +297,36 @@ public class GameDebugWindow extends JFrame {
         }
 
         void applyUpdate(GameStateUpdate update) {
-
-            if (update.isFullState()) {
-                applyFullState(update);
-            } else {
-                applyDelta(update);
-            }
-        }
-
-        private void applyFullState(GameStateUpdate update) {
-
-            int width = update.getMapWidth();
-            int height = update.getMapHeight();
-
-            if (width <= 0
-                    || height <= 0
-                    || update.getFullMap().size() != width * height) {
-
-                syncMessage = "Invalid FULL_STATE";
+            // Dùng chung codec và replica như client mạng sau này; ở đây chưa qua TCP.
+            try {
+                update = com.bombit.server.game.movement.SnapshotPacketCodec.decode(
+                        com.bombit.server.game.movement.SnapshotPacketCodec.encode(update));
+            } catch (java.io.IOException error) {
+                syncMessage = "Snapshot decode failed: " + error.getMessage();
                 return;
             }
-
-            mapWidth = width;
-            mapHeight = height;
-            tileSize = update.getTileSize();
-
-            tiles = new GameMap.TileType[height][width];
-
-            // Chuyen danh sach tile thanh mang hai chieu.
-            for (int y = 0; y < height; y++) {
-                for (int x = 0; x < width; x++) {
-
-                    int index = y * width + x;
-
-                    tiles[y][x] =
-                            update.getFullMap().get(index);
-                }
+            var result = replica.apply(update);
+            syncMessage = result.name();
+            if (result != com.bombit.client.game.movement.ClientWorldState.Result.APPLIED) return;
+            mapWidth = replica.getWidth(); mapHeight = replica.getHeight(); tileSize = replica.getTileSize();
+            tiles = new TileType[mapHeight][mapWidth];
+            var flat = replica.getTiles();
+            for (int y = 0; y < mapHeight; y++) {
+                for (int x = 0; x < mapWidth; x++) tiles[y][x] = flat.get(y * mapWidth + x);
             }
-
-            players.clear();
-
-            for (GameStateUpdate.PlayerData player
-                    : update.getPlayers()) {
-
-                players.put(player.getId(), player);
-            }
-
-            matchState = update.getMatchState().name();
-            latestTick = update.getTick();
-
-            fullStateCount++;
-
-            lastTileChangeCount = 0;
-            lastPlayerChangeCount = players.size();
-
-            syncMessage = "FULL_STATE applied";
-        }
-
-        private void applyDelta(GameStateUpdate update) {
-
-            if (tiles == null) {
-                syncMessage = "Waiting for initial FULL_STATE";
-                return;
-            }
-
-            // Chi ap dung delta neu Client co dung trang thai co so.
-            if (update.getBaseTick() != latestTick) {
-
-                syncMessage = "DESYNC: expected baseTick "
-                        + latestTick
-                        + ", received "
-                        + update.getBaseTick();
-
-                return;
-            }
-
-            // Kiem tra cac o truoc khi ap dung delta.
-            for (GameStateUpdate.TileChange change
-                    : update.getTileChanges()) {
-
-                if (change.getX() < 0
-                        || change.getX() >= mapWidth
-                        || change.getY() < 0
-                        || change.getY() >= mapHeight) {
-
-                    syncMessage = "Invalid tile coordinate";
-                    return;
-                }
-            }
-
-            for (GameStateUpdate.TileChange change
-                    : update.getTileChanges()) {
-
-                tiles[change.getY()][change.getX()] =
-                        change.getNewType();
-            }
-
-            for (GameStateUpdate.PlayerData player
-                    : update.getPlayerChanges()) {
-
-                players.put(player.getId(), player);
-            }
-
-            for (Integer id : update.getRemovedPlayerIds()) {
-                players.remove(id);
-            }
-
-            if (update.isMatchStateChanged()) {
-                matchState = update.getMatchState().name();
-            }
-
-            latestTick = update.getTick();
-
-            deltaCount++;
-
-            lastTileChangeCount =
-                    update.getTileChanges().size();
-
-            lastPlayerChangeCount =
-                    update.getPlayerChanges().size();
-
-            syncMessage = "DELTA applied";
+            players.clear(); players.putAll(replica.getPlayers());
+            matchState = replica.getMatchState().name(); latestTick = replica.getTick();
+            if (update.isFullState()) fullStateCount++; else deltaCount++;
+            lastTileChangeCount = update.getTileChanges().size();
+            lastPlayerChangeCount = update.isFullState() ? update.getPlayers().size() : update.getPlayerChanges().size();
+            setPreferredSize(new Dimension(Math.max(640, mapWidth * tileSize + 40),
+                    mapHeight * tileSize + 150 + players.size() * 18));
+            revalidate();
+            if (getTopLevelAncestor() instanceof JFrame frame) frame.pack();
         }
 
         @Override
+        // Mục đích: Vẽ từ bản sao client trên EDT; tạo Graphics2D riêng và dispose sau dùng để không rò tài nguyên hoặc làm đổi Graphics gốc.
         protected void paintComponent(Graphics graphics) {
 
             super.paintComponent(graphics);
@@ -445,13 +378,13 @@ public class GameDebugWindow extends JFrame {
                         int px = boardX + x * tileSize;
                         int py = boardY + y * tileSize;
 
-                        GameMap.TileType tile = tiles[y][x];
+                        TileType tile = tiles[y][x];
 
-                        if (tile == GameMap.TileType.HARD_WALL) {
+                        if (tile == TileType.HARD_WALL) {
                             g.setColor(new Color(75, 85, 99));
 
                         } else if (
-                                tile == GameMap.TileType.BREAKABLE_BLOCK) {
+                                tile == TileType.BREAKABLE_BLOCK) {
 
                             g.setColor(new Color(217, 155, 75));
 
@@ -512,7 +445,7 @@ public class GameDebugWindow extends JFrame {
                             "P" + player.getId()
                                     + " x=" + Math.round(player.getX())
                                     + " y=" + Math.round(player.getY())
-                                    + " dir=" + player.getDirection()
+                                    + " dir=" + player.direction()
                                     + " moving=" + player.isMoving()
                                     + " alive=" + player.isAlive(),
                             20, statusY);

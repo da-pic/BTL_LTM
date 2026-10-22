@@ -2,7 +2,7 @@ package com.bombit.client.game.bomb;
 
 import com.bombit.client.game.item.ItemRenderer;
 import com.bombit.client.game.item.ItemView;
-import com.bombit.server.game.bomb.TilePosition;
+import com.bombit.server.game.model.TilePosition;
 import com.bombit.server.game.item.ItemType;
 import org.junit.jupiter.api.Test;
 
@@ -13,6 +13,18 @@ import java.util.Set;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class Java2DRendererTest {
+    @Test void fiveBasicItemIconsAreVisibleAndDistinct(){
+        var signatures=new java.util.HashSet<Integer>();
+        for(var type:ItemType.values()){
+            var image=new BufferedImage(64,64,BufferedImage.TYPE_INT_ARGB);var g=image.createGraphics();
+            try{new ItemRenderer().render(g,new ItemView(1,type,new TilePosition(0,0)),64,0,0,1000);}
+            finally{g.dispose();}
+            int[] pixels=image.getRGB(0,0,64,64,null,0,64);
+            assertTrue(java.util.Arrays.stream(pixels).anyMatch(p->(p>>>24)!=0));
+            signatures.add(java.util.Arrays.hashCode(pixels));
+        }
+        org.junit.jupiter.api.Assertions.assertEquals(5,signatures.size());
+    }
     @Test
     void rendersBombExplosionAndItemToImage() {
         BufferedImage image = new BufferedImage(192, 64, BufferedImage.TYPE_INT_ARGB);

@@ -32,9 +32,14 @@ public final class RoomManager {
     }
 
     public Room createRoom(String roomName, Session host) {
+        return createRoom(roomName, host, maxPlayersPerRoom);
+    }
+
+    public Room createRoom(String roomName, Session host, int capacity) {
         requireAvailable(host);
+        if (capacity < 2 || capacity > 4) throw new IllegalArgumentException("Capacity must be 2..4");
         String roomId = UUID.randomUUID().toString();
-        Room room = new Room(roomId, roomName, maxPlayersPerRoom, host);
+        Room room = new Room(roomId, roomName, capacity, host);
         rooms.put(roomId, room);
         host.setRoomId(roomId);
         host.setState(SessionState.IN_ROOM);
@@ -75,7 +80,7 @@ public final class RoomManager {
             publishRoomState(room);
         }
         player.setRoomId(null);
-        if (player.getState() != SessionState.CLOSED) {
+        if (player.getState() != SessionState.CLOSED && player.getState() != SessionState.DISCONNECTED) {
             player.setState(SessionState.IN_LOBBY);
         }
     }
@@ -108,6 +113,23 @@ public final class RoomManager {
         return Optional.of(next);
     }
 
+    /** Protocol-2 READY sets a value; repeated requests must never toggle it back. */
+    public Optional<SessionState> setReady(Session player, boolean ready) {
+        String roomId = player.getRoomId();
+        Room room = roomId == null ? null : rooms.get(roomId);
+        if (room == null) return Optional.empty();
+        SessionState next = ready ? SessionState.READY : SessionState.IN_ROOM;
+        synchronized (room) {
+            if (rooms.get(roomId) != room || room.getState() != Room.State.WAITING
+                    || !room.getPlayersSnapshot().contains(player)) return Optional.empty();
+            SessionState current = player.getState();
+            if (current != SessionState.IN_ROOM && current != SessionState.READY) return Optional.empty();
+            player.setState(next);
+        }
+        publishRoomState(room);
+        return Optional.of(next);
+    }
+
     public Optional<Room> startGame(Session requester) {
         String roomId = requester.getRoomId();
         if (roomId == null) {
@@ -134,30 +156,18 @@ public final class RoomManager {
     public Room find(String roomId) { return rooms.get(roomId); }
     public Map<String, Room> snapshot() { return Map.copyOf(rooms); }
 
-    private void publishRoomState(Room room) {
-        broadcaster.broadcast(room.getRoomId(),
-                new OutboundMessage(ROOM_STATE_TYPE, buildRoomStatePayload(room)));
+    public void publishRoomState(Room room) {
+        if (!room.isEmpty()) broadcaster.broadcast(room.getRoomId(),
+                OutboundMessage.fromPacket(com.bombit.common.protocol.LobbyPacketCodec.roomState(view(room))));
     }
 
-    private static byte[] buildRoomStatePayload(Room room) {
-        List<Session> players = room.getPlayersSnapshot();
-        StringBuilder json = new StringBuilder("{");
-        json.append("\"roomId\":\"").append(room.getRoomId()).append("\",");
-        json.append("\"roomName\":\"").append(escapeJson(room.getRoomName())).append("\",");
-        json.append("\"hostId\":\"").append(room.getHostPlayerId()).append("\",");
-        json.append("\"state\":\"").append(room.getState()).append("\",");
-        json.append("\"players\":[");
-        for (int i = 0; i < players.size(); i++) {
-            Session player = players.get(i);
-            if (i > 0) {
-                json.append(',');
-            }
-            json.append("{\"playerId\":\"").append(player.getPlayerId()).append("\",");
-            json.append("\"username\":\"").append(escapeJson(player.getUsername())).append("\",");
-            json.append("\"state\":\"").append(player.getState()).append("\"}");
+    public static com.bombit.common.protocol.LobbyPacketCodec.RoomView view(Room room) {
+        synchronized (room) {
+            return new com.bombit.common.protocol.LobbyPacketCodec.RoomView(room.getRoomId(), room.getRoomName(),
+                    room.getHostPlayerId(), room.getState().name(), room.getMaxPlayers(),
+                    room.getPlayersSnapshot().stream().map(p -> new com.bombit.common.protocol.LobbyPacketCodec.Player(
+                            p.getPlayerId(), p.getUsername(), p.getState().name())).toList());
         }
-        json.append("]}");
-        return json.toString().getBytes(StandardCharsets.UTF_8);
     }
 
     private static byte[] buildGameStartedPayload(Room room) {

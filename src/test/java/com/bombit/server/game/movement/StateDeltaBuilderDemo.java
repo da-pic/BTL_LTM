@@ -1,18 +1,26 @@
 package com.bombit.server.game.movement;
 
+import com.bombit.server.game.model.TileType;
+import com.bombit.server.game.model.Direction;
 import com.bombit.server.game.core.GameMap;
 import com.bombit.server.game.core.GameState;
 import com.bombit.server.game.core.Player;
 
+/**
+ * Demo full/delta theo các thay đổi map và player.
+ * Dùng check để dừng ngay khi điều kiện sai, đồng thời in từng trường hợp để dễ theo dõi.
+ * Bao gồm baseline/commit và full đồng bộ lại; chưa đo traffic qua mạng.
+ */
 public class StateDeltaBuilderDemo {
 
+    // Mục đích: Chạy các bước kiểm tra của StateDeltaBuilderDemo; xem chú thích tại từng kịch bản và kết quả console.
     public static void main(String[] args) {
 
         // 1. Tao map va dat mot block co the pha.
         GameMap map = new GameMap(8, 6, 32);
 
         map.setTile(
-                3, 2, GameMap.TileType.BREAKABLE_BLOCK);
+                3, 2, TileType.BREAKABLE_BLOCK);
 
         // 2. Tao GameState va Player.
         GameState state = new GameState(map);
@@ -33,14 +41,14 @@ public class StateDeltaBuilderDemo {
         check(full != null, "Tao duoc FULL_STATE");
         check(full.isFullState(), "Loai update la FULL_STATE");
         check(full.getTick() == 1, "Tick ban dau bang 1");
-        check(full.getFullMap().size() == 48,
+        check(full.mapTiles().size() == 48,
                 "Map co du 48 tile");
 
         int blockIndex = 2 * map.getWidthInTiles() + 3;
 
         check(
-                full.getFullMap().get(blockIndex)
-                        == GameMap.TileType.BREAKABLE_BLOCK,
+                full.mapTiles().get(blockIndex)
+                        == TileType.BREAKABLE_BLOCK,
                 "FULL_STATE chua block tai (3,2)");
 
         check(full.getPlayers().size() == 1,
@@ -60,7 +68,7 @@ public class StateDeltaBuilderDemo {
         System.out.println("\n=== TEST 3: PLAYER DI CHUYEN ===");
 
         p1.setPosition(64, 32);
-        p1.setDirection(Player.Direction.RIGHT);
+        p1.setDirection(Direction.RIGHT);
         p1.setMoving(true);
 
         GameStateUpdate playerDelta =
@@ -108,7 +116,7 @@ public class StateDeltaBuilderDemo {
         check(tileChange.getY() == 2,
                 "Tile thay doi dung hang 2");
 
-        check(tileChange.getNewType() == GameMap.TileType.EMPTY,
+        check(tileChange.tileType() == TileType.EMPTY,
                 "Tile moi la EMPTY");
 
         check(tileDelta.getPlayerChanges().isEmpty(),
@@ -171,7 +179,7 @@ public class StateDeltaBuilderDemo {
         check(resync.getBaseTick() == -1,
                 "FULL_STATE khong phu thuoc baseTick cu");
 
-        check(resync.getFullMap().size() == 48,
+        check(resync.mapTiles().size() == 48,
                 "Full map resync co du 48 tile");
 
         check(resync.getPlayers().isEmpty(),
@@ -182,6 +190,7 @@ public class StateDeltaBuilderDemo {
         System.out.println("\n=== KET THUC KIEM THU ===");
     }
 
+    // Mục đích: Ném AssertionError khi điều kiện sai để chạy CLI trả mã lỗi; không phụ thuộc cờ -ea của JVM.
     private static void check(
             boolean condition, String description) {
 

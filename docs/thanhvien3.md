@@ -399,7 +399,7 @@ Chạy cửa sổ demo Java 2D độc lập trên Windows PowerShell:
 ```powershell
 $files = rg --files src/main/java -g "*.java"
 New-Item -ItemType Directory -Force target/demo-classes | Out-Null
-javac --release 17 -d target/demo-classes $files
+javac --release 25 -d target/demo-classes $files
 java -cp target/demo-classes com.bombit.client.game.bomb.BombItemEffectsDemo
 ```
 

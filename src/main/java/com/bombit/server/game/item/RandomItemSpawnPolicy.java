@@ -1,6 +1,6 @@
 package com.bombit.server.game.item;
 
-import com.bombit.server.game.bomb.TilePosition;
+import com.bombit.server.game.model.TilePosition;
 
 import java.util.Objects;
 import java.util.Optional;
@@ -12,7 +12,7 @@ public final class RandomItemSpawnPolicy implements ItemSpawnPolicy {
     private final RandomGenerator random;
 
     public RandomItemSpawnPolicy(double dropChance, RandomGenerator random) {
-        if (dropChance < 0 || dropChance > 1) {
+        if (!Double.isFinite(dropChance) || dropChance < 0 || dropChance > 1) {
             throw new IllegalArgumentException("Drop chance must be between 0 and 1");
         }
         this.dropChance = dropChance;

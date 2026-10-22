@@ -4,12 +4,22 @@ import java.util.Objects;
 import com.bombit.server.game.core.GameMap;
 import com.bombit.server.game.core.Player;
 
+/**
+ * Kiểm tra va chạm hitbox hình chữ nhật với map nền và biên bản đồ.
+ * Chia quãng đường thành các bước tối đa một pixel để hạn chế xuyên vật cản.
+ * Xử lý trục X trước Y; hiện chưa kiểm tra player-player hoặc vật cản bomb.
+ * Cạnh phải/dưới không thuộc hitbox, nên đứng sát mép tường vẫn hợp lệ.
+ */
 public class CollisionSystem {
+    // Ảnh bom của tick hiện tại; MovementSystem cập nhật từ world trước khi mô phỏng.
+    private java.util.List<EntityData> entities = java.util.List.of();
+    public void setEntities(java.util.List<EntityData> entities) { this.entities = java.util.List.copyOf(entities); }
 
     //Một bước di chuyển = 1 (pixel)
     private static final double MAX_STEP_PIXELS = 1.0;
 
     //Kiểm tra hitbox Player có nằm ở vị trí hợp lệ hay ko
+    // Mục đích: Kiểm tra toàn bộ các tile mà hitbox phủ lên. nextDown loại cạnh phải/dưới khỏi vùng bao gồm, tránh tính nhầm tile kề khi đứng sát mép.
     public boolean canOccupy(
             GameMap map, Player player, double x, double y) {
 
@@ -55,10 +65,21 @@ public class CollisionSystem {
             }
         }
 
+        // Bom chặn đường. Nhân vật đang chồng ô bom được bước ra; khi đã ra hết
+        // hitbox thì không vào lại được. Quy tắc này cũng xử lý lúc hai người đứng cùng ô đặt bom.
+        for (EntityData entity : entities) {
+            if (entity.kind() != EntityData.Kind.BOMB) continue;
+            double bx = entity.tileX() * (double) tileSize, by = entity.tileY() * (double) tileSize;
+            boolean nextOverlap = x < bx + tileSize && right > bx && y < by + tileSize && bottom > by;
+            boolean currentOverlap = player.getX() < bx + tileSize && player.getX() + player.getWidth() > bx
+                    && player.getY() < by + tileSize && player.getY() + player.getHeight() > by;
+            if (nextOverlap && !currentOverlap) return false;
+        }
         return true;
     }
 
     //Di chuyển theo cột (x) trước, hàng (y) sau 
+    // Mục đích: Dịch chuyển lần lượt từng trục thông qua các bước nhỏ; một trục bị chặn không ngăn xử lý trục còn lại.
     public void move(
             Player player, GameMap map,
             double dx, double dy) {
@@ -82,6 +103,7 @@ public class CollisionSystem {
         moveAxis(player, map, dy, false);
     }
 
+    // Mục đích: Giới hạn mỗi bước một pixel, dừng ngay trước vị trí không hợp lệ. Ngưỡng 1e-9 tránh vòng lặp do phần dư sai số double rất nhỏ.
     private void moveAxis(
             Player player, GameMap map,
             double distance, boolean horizontal) {

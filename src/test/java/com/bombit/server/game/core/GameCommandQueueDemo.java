@@ -1,9 +1,16 @@
 package com.bombit.server.game.core;
+import com.bombit.server.game.model.Direction;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 
+/**
+ * Demo hàng đợi lệnh với hai luồng giả lập client gửi đồng thời.
+ * Kiểm tra FIFO và việc enqueue/dequeue không tự thay đổi tọa độ Player.
+ * Đây là demo nội bộ JVM, không mở kết nối TCP và không phải bài đo hiệu năng mạng.
+ */
 public class GameCommandQueueDemo {
 
+    // Mục đích: Chạy các bước kiểm tra của GameCommandQueueDemo; xem chú thích tại từng kịch bản và kết quả console.
     public static void main(String[] args)
             throws InterruptedException {
 
@@ -26,8 +33,7 @@ public class GameCommandQueueDemo {
         double oldX = p1.getX();
 
         // 3. Tao va dua command vao hang doi
-        GameCommand command = new GameCommand(
-                1, Player.Direction.RIGHT, true);
+        GameCommand command = new MoveCommand(1, Direction.RIGHT);
 
         boolean added = commandQueue.offer(command);
 
@@ -57,14 +63,12 @@ public class GameCommandQueueDemo {
         // 5. Hai thread mo phong hai Client gui command
         Thread client1 = new Thread(() -> {
             commandQueue.offer(
-                    new GameCommand(
-                            1, Player.Direction.RIGHT, true));
+                    new MoveCommand(1, Direction.RIGHT));
         }, "Client-1");
 
         Thread client2 = new Thread(() -> {
             commandQueue.offer(
-                    new GameCommand(
-                            2, Player.Direction.UP, true));
+                    new MoveCommand(2, Direction.UP));
         }, "Client-2");
 
         // 6. Khoi dong hai thread

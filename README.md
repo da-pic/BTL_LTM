@@ -1,15 +1,89 @@
 # Bomb It Multiplayer — Java project structure
 
-Bộ khung thư mục cho project môn Lập trình Mạng. Dùng Java 17+ + Maven; chưa khóa thư viện giao diện (JavaFX/Swing/LibGDX) và chưa cài luật gameplay cụ thể.
+Baseline hiện hành: **JDK/Java 25** cho build, server và client. Xem [cấu hình JDK/IDE và chuyển đổi](docs/JDK25_MIGRATION.md).
+
+Luật item mới: [5 loại item, mạng/hồi sinh, khiên và cấu hình trận](docs/EXTENDED_ITEMS_LIVES.md).
+Bom mặc định range 1; 3 mạng/người; drop từ block 75%, không có item đầu trận.
+
+Movement mặc định: ô 32×32, hitbox 24×24 căn giữa, tốc độ 80 px/s, giày +8 (trần 144).
+[Cấu hình và kiểm chứng logic ô](docs/MOVEMENT_BALANCE.md).
+
+Map có lưới rõ và viền xanh đánh dấu ô nhân vật; giữ di chuyển mượt, bom đặt theo ô chứa tâm.
+Xem [quy tắc ô và đặt bom](docs/GRID_BOMB_PLACEMENT.md).
+
+Map gameplay chỉnh tại `server/game/map/DefaultArenaMap.java`: tường đá cố định và thùng gỗ
+phân bố đối xứng, bảo đảm vùng thoát bom ở bốn góc. [Bố cục và cách sửa](docs/DEFAULT_ARENA_MAP.md).
+
+Bàn giao nhiệm vụ 10 (22/10/2026): [báo cáo/checklist](docs/TASK10_HANDOVER.md),
+[số đo và CSV thực tế](docs/NETWORK_MEASUREMENTS.md), [chạy LAN](docs/LAN_GUIDE.md),
+[đóng gói](docs/PACKAGING.md), [báo cáo kỹ thuật](docs/TECHNICAL_REPORT.md),
+[kịch bản demo](docs/DEMO_SCRIPT.md). Đã chạy 112 test và đo TCP loopback 1/2/4 client;
+nghiệm thu GUI và LAN nhiều máy, soak dài hạn vẫn cần nhóm thực hiện. Reconnect chưa bật.
+
+Build bản chạy không cần Maven; chạy JUnit cần Maven. Java 25+ (build cần JDK):
+
+```powershell
+cmd /c scripts\build-demo.cmd
+cmd /c scripts\test.cmd
+cmd /c scripts\run-benchmark.cmd --local --mode suite --seconds 5 --warmup 1 --csv target\network-results.csv
+cmd /c scripts\package.cmd
+```
+
+JAR: `target/bomb-it-multiplayer.jar`; ZIP runtime và SHA256: `target/release/`.
+Giải nén ZIP trên máy nhận có Java 25+, rồi chạy `scripts\run-server.cmd 8888`
+và `scripts\run-client.cmd SERVER_IP 8888 TEN`. Không cần Maven/JDK trên máy chỉ chạy.
+ZIP không chứa source hoặc Java runtime; chuyển source repository riêng nếu cần build lại.
+
+Project môn Lập trình Mạng dùng Java 25+, Swing và TCP. Đã ghép lobby, movement, bom/item multiplayer
+với renderer TV3, damage/chết và kết quả trận tự động. Maven dùng để chạy test;
+script demo có thể build production bằng javac mà không cần Maven.
 
 ## Bắt đầu
 
+Độ ổn định: [báo cáo nhiệm vụ 9](docs/TASK9_STABILITY.md) có giới hạn queue/rate,
+deadline và kết quả 108 test cùng stress cục bộ. Reconnect chưa bật;
+xem [đánh giá phạm vi riêng](docs/RECONNECT_ASSESSMENT.md).
+
+M2 có Connect/Lobby, tạo/join/leave phòng, ready/start, chat, quyền host và chơi lại. Xem
+[docs/M2_LOBBY_LIFECYCLE.md](docs/M2_LOBBY_LIFECYCLE.md) để chạy, xem test thực tế và checklist GUI/LAN còn lại.
+
+```powershell
+cmd /c scripts\build-demo.cmd
+cmd /c scripts\run-server.cmd 8888
+```
+
+Mở hai terminal khác, mỗi terminal chạy một client:
+
+```powershell
+cmd /c scripts\run-client.cmd 127.0.0.1 8888 Chinh
+```
+
+Đổi tên client còn lại thành Mai. Bấm Connect; một người Create, người kia chọn phòng và Join.
+Khách Ready, host Start; dùng phím mũi tên di chuyển và Space đặt bom. Item tự nhặt khi bước vào ô;
+HUD hiện quota/range/speed và thời gian còn lại. Hết trận tự mở tab Kết quả trong lobby.
+Ready/Start để chơi lại; host End round để hủy lượt hiện tại;
+Leave room để về danh sách phòng. Người rời/mất kết nối sẽ hủy lượt đang chơi cho cả phòng.
+
+M1 vẫn có tại [docs/M1_MOVEMENT_DEMO.md](docs/M1_MOVEMENT_DEMO.md): server thêm số người `2`,
+client thêm `--demo` sau tên. `--headless` dành cho smoke M1.
+
+Tiến độ server transport: [báo cáo nhiệm vụ 3](docs/SERVER_TRANSPORT_STATUS.md).
+Sau `mvn test`, có thể chạy `java -cp target/classes com.bombit.server.network.Server 8888`.
+Server transport thuần yêu cầu CONNECT protocol 2 trước PING và chỉ nối CONNECT/PING/DISCONNECT.
+Để dùng lobby/movement, dùng ServerApplication/run-server.cmd ở trên.
+Công cụ manual-client legacy chưa được nâng cấp handshake.
+
 1. Giải nén project và mở thư mục `BombItMultiplayer-Structure` bằng VS Code/IntelliJ.
-2. Đảm bảo máy có JDK 17+ và Maven (hoặc Maven extension trong VS Code).
+2. Đảm bảo máy có JDK 25+ và Maven (hoặc Maven extension trong VS Code).
 3. Chạy kiểm tra build bằng `mvn test` từ thư mục có `pom.xml`.
 4. Tạo branch theo module trước khi code: `feature/tv1-network`, `feature/tv2-movement`, `feature/tv3-bomb-items`, `feature/tv4-protocol-metrics`.
 
 ## Chủ sở hữu module
+
+Tiến độ hiện tại: [item, chết và kết quả trận](docs/TASK8_ITEMS_RESULTS.md).
+Luật mặc định: drop 75%, 3 mạng/người, trận 180 giây, còn một người thắng, cùng hết mạng/hết giờ hòa;
+disconnect hủy lượt. TCP và bảng kết quả offscreen đã kiểm thử; nghiệm thu Swing trực tiếp/LAN
+vẫn cần nhóm xác nhận; stress hữu hạn đã chạy ở nhiệm vụ 9. Profile M1 vẫn chỉ di chuyển.
 
 | Thành viên | Thư mục chính | Trách nhiệm |
 |---|---|---|
@@ -39,6 +113,6 @@ Các kết nối/handler không sửa `GameState` tùy tiện từ nhiều threa
 ## Ghi chú về Server Foundation (TV1 - Mai)
 
 - TCP server lifecycle, graceful shutdown và thread pool.
-- Quản lý Session, Reconnect token auth, Room lifecycle.
+- Quản lý Session và Room lifecycle; reconnect ứng dụng chưa bật, xem đánh giá phạm vi riêng.
 - Room broadcast, Chat handler, Heartbeat.
 - Port mặc định: 8888 (`server.network.Server`).

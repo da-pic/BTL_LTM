@@ -1,5 +1,8 @@
 package com.bombit.server.game.bomb;
 
+import com.bombit.server.game.model.TilePosition;
+import com.bombit.server.game.model.TileType;
+
 import com.bombit.server.game.event.GameEvent;
 import com.bombit.server.game.event.PlayerDiedEvent;
 import org.junit.jupiter.api.Test;

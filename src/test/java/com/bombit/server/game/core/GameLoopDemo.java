@@ -1,8 +1,16 @@
 package com.bombit.server.game.core;
+import com.bombit.server.game.model.TileType;
+import com.bombit.server.game.model.Direction;
 import com.bombit.server.game.movement.GameStateUpdate;
 
+/**
+ * Demo vòng đời GameLoop: khởi tạo trận, chạy luồng, gửi MOVE và STOP rồi dừng.
+ * Dùng số command đã xử lý để chờ tiến trình, sau đó kiểm tra kết quả khi loop đã dừng.
+ * Các khoảng ngủ phụ thuộc lịch chạy thread; không coi đây là benchmark thời gian chính xác.
+ */
 public class GameLoopDemo {
 
+    // Mục đích: Chạy các bước kiểm tra của GameLoopDemo; xem chú thích tại từng kịch bản và kết quả console.
     public static void main(String[] args)
             throws InterruptedException {
 
@@ -11,22 +19,22 @@ public class GameLoopDemo {
 
         // 2. Tao tuong bao quanh map.
         for (int x = 0; x < map.getWidthInTiles(); x++) {
-            map.setTile(x, 0, GameMap.TileType.HARD_WALL);
+            map.setTile(x, 0, TileType.HARD_WALL);
 
             map.setTile(
                     x,
                     map.getHeightInTiles() - 1,
-                    GameMap.TileType.HARD_WALL
+                    TileType.HARD_WALL
             );
         }
 
         for (int y = 0; y < map.getHeightInTiles(); y++) {
-            map.setTile(0, y, GameMap.TileType.HARD_WALL);
+            map.setTile(0, y, TileType.HARD_WALL);
 
             map.setTile(
                     map.getWidthInTiles() - 1,
                     y,
-                    GameMap.TileType.HARD_WALL
+                    TileType.HARD_WALL
             );
         }
 
@@ -62,7 +70,7 @@ public class GameLoopDemo {
 
             System.out.println(
                     "Initial map tiles: "
-                            + initial.getFullMap().size());
+                            + initial.mapTiles().size());
 
             System.out.println(
                     "Initial players: "
@@ -70,11 +78,7 @@ public class GameLoopDemo {
 
             // 6. Gui lenh di sang phai.
             moveSubmitted = gameLoop.submitCommand(
-                    new GameCommand(
-                            1,
-                            Player.Direction.RIGHT,
-                            true
-                    )
+                    new MoveCommand(1, Direction.RIGHT)
             );
 
             moveProcessed = waitForCommands(
@@ -85,11 +89,7 @@ public class GameLoopDemo {
 
             // 7. Gui lenh dung.
             stopSubmitted = gameLoop.submitCommand(
-                    new GameCommand(
-                            1,
-                            Player.Direction.RIGHT,
-                            false
-                    )
+                    new StopMovingCommand(1, Direction.RIGHT, 0)
             );
 
             stopProcessed = waitForCommands(
@@ -164,6 +164,7 @@ public class GameLoopDemo {
         System.out.println("=== KET THUC KIEM THU ===");
     }
 
+    // Mục đích: Chờ có giới hạn để loop xử lý đủ command trước khi kiểm tra; tránh treo vô hạn khi thread không tiến triển.
     private static boolean waitForCommands(
             GameLoop gameLoop,
             long expectedCount,

@@ -17,6 +17,7 @@ import java.util.Objects;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.*;
 import java.util.function.Consumer;
 
 import com.bombit.metrics.ThroughputMonitor;
@@ -31,26 +32,52 @@ public final class ClientNetwork implements AutoCloseable {
     private final CopyOnWriteArrayList<Consumer<Packet>> listeners = new CopyOnWriteArrayList<>();
     private final Map<Short, CopyOnWriteArrayList<Consumer<Packet>>> typedListeners = new ConcurrentHashMap<>();
     // Queue hỗ trợ module muốn pull packet; giới hạn dung lượng để không tăng RAM vô hạn.
-    private final BlockingQueue<Packet> receivedPackets = new ArrayBlockingQueue<>(1_024);
+    private record Received(Packet packet,int bytes,long generation){}
+    private final BlockingQueue<Received> receivedPackets = new ArrayBlockingQueue<>(1_024);
+    private final Object receiveLock=new Object();
+    private long queuedBytes,queueGeneration;
     private final Object sendLock = new Object();
     private final ThroughputMonitor throughputMonitor = new ThroughputMonitor();
     private volatile Socket socket;
     private volatile Thread listenerThread;
     private volatile Consumer<Throwable> onDisconnect = error -> { };
+    private volatile boolean packetQueueEnabled = true;
+    private volatile ScheduledExecutorService writeGuard;
+    private volatile long writingSince;
+    private final long writeTimeoutNanos;
+    public ClientNetwork(){this(5000);}
+    public ClientNetwork(long writeTimeoutMillis){
+        if(writeTimeoutMillis<=0)throw new IllegalArgumentException("Invalid write deadline");
+        writeTimeoutNanos=TimeUnit.MILLISECONDS.toNanos(writeTimeoutMillis);
+    }
+
+    /** Listener-only clients opt out of the duplicate pull queue; receive() stays enabled by default. */
+    public void setPacketQueueEnabled(boolean enabled) {
+        packetQueueEnabled = enabled;
+        if (!enabled) clearPullQueue();
+    }
 
     /** Tạo kết nối mới; timeout giúp tránh treo vô hạn khi host không phản hồi. */
     public synchronized void connect(String host, int port) throws IOException {
         Objects.requireNonNull(host, "host");
         if (port < 1 || port > 65535) throw new IllegalArgumentException("Port phải nằm trong 1..65535");
         if (running.get()) throw new IllegalStateException("Client đã được kết nối");
+        if(listenerThread!=null&&listenerThread.isAlive())throw new IllegalStateException("Previous reader is still stopping");
         Socket candidate = new Socket();
         try {
             candidate.connect(new InetSocketAddress(host, port), 5_000);
             candidate.setTcpNoDelay(true);
-            receivedPackets.clear(); // Không để packet từ phiên trước lọt sang phiên mới.
+            clearPullQueue(); // Không để packet từ phiên trước lọt sang phiên mới.
             socket = candidate;
             running.set(true);
-            Thread reader = new Thread(() -> listen(candidate), "Client-Network-Listener");
+            var guard=Executors.newSingleThreadScheduledExecutor(r->{var t=new Thread(r,"Client-Write-Watchdog");t.setDaemon(true);return t;});
+            writeGuard=guard;
+            guard.scheduleAtFixedRate(()->{
+                long since=writingSince;
+                if(running.get()&&socket==candidate&&since!=0&&System.nanoTime()-since>=writeTimeoutNanos)
+                    try{candidate.close();}catch(IOException ignored){}
+            },50,50,TimeUnit.MILLISECONDS);
+            Thread reader = new Thread(() -> listen(candidate,guard), "Client-Network-Listener");
             reader.setDaemon(true); // Listener không giữ ứng dụng sống khi caller quên disconnect.
             listenerThread = reader;
             reader.start();
@@ -68,11 +95,12 @@ public final class ClientNetwork implements AutoCloseable {
             throw new SocketException("Client chưa kết nối hoặc kết nối đã đóng");
         }
         synchronized (sendLock) {
-            if (!running.get()) throw new SocketException("Kết nối đã đóng");
+            if (!running.get()||socket!=active) throw new SocketException("Kết nối đã đóng");
             // Ghi một frame nguyên vẹn để nhiều luồng gửi không làm xen byte trên TCP.
             byte[] frame = PacketEncoder.encode(packet);
-            active.getOutputStream().write(frame);
-            active.getOutputStream().flush();
+            writingSince=System.nanoTime();
+            try{active.getOutputStream().write(frame);active.getOutputStream().flush();}
+            finally{writingSince=0;}
             throughputMonitor.addPacket(frame.length);
         }
     }
@@ -106,7 +134,7 @@ public final class ClientNetwork implements AutoCloseable {
     public Packet receive(Duration timeout) throws InterruptedException {
         Objects.requireNonNull(timeout, "timeout");
         if (timeout.isNegative()) throw new IllegalArgumentException("Timeout không thể âm");
-        return receivedPackets.poll(timeout.toNanos(), java.util.concurrent.TimeUnit.NANOSECONDS);
+        return unwrap(receivedPackets.poll(timeout.toNanos(), java.util.concurrent.TimeUnit.NANOSECONDS));
     }
 
     /**
@@ -115,7 +143,7 @@ public final class ClientNetwork implements AutoCloseable {
      */
     public Packet receive() throws InterruptedException {
         while (true) {
-            Packet packet = receivedPackets.poll(100, java.util.concurrent.TimeUnit.MILLISECONDS);
+            Packet packet = unwrap(receivedPackets.poll(100, java.util.concurrent.TimeUnit.MILLISECONDS));
             if (packet != null) return packet;
             if (!running.get()) return null;
         }
@@ -142,17 +170,20 @@ public final class ClientNetwork implements AutoCloseable {
         return running.get() && active != null && active.isConnected() && !active.isClosed();
     }
 
-    private void listen(Socket active) {
+    private void listen(Socket active,ScheduledExecutorService guard) {
         Throwable disconnectCause = null;
         try {
             while (running.get() && !active.isClosed()) {
                 Packet packet = PacketDecoder.decode(active.getInputStream());
+                if(!running.get()||socket!=active)break;
                 int frameSize = Integer.BYTES + Short.BYTES
                         + packet.getJsonPayload().getBytes(StandardCharsets.UTF_8).length;
                 throughputMonitor.addPacket(frameSize);
-                if (!receivedPackets.offer(packet)) {
-                    System.err.println("[ClientNetwork] Hàng đợi nhận đầy; packet "
-                            + String.format("0x%04X", Short.toUnsignedInt(packet.getType())) + " bị bỏ qua ở hàng đợi.");
+                synchronized(receiveLock){if(packetQueueEnabled){
+                    if(queuedBytes+frameSize>4L*1024*1024||!receivedPackets.offer(new Received(packet,frameSize,queueGeneration)))
+                        throw new IOException("Client receive queue full; a fresh connection is required to avoid losing state");
+                    queuedBytes+=frameSize;
+                }
                 }
                 notifyListeners(listeners, packet);
                 notifyListeners(typedListeners.get(packet.getType()), packet);
@@ -160,6 +191,7 @@ public final class ClientNetwork implements AutoCloseable {
         } catch (IOException e) {
             if (running.get()) disconnectCause = e;
         } finally {
+            guard.shutdownNow();
             // Cùng khóa với connect/disconnect để reader cũ không làm ngắt phiên reconnect.
             boolean wasRunning;
             synchronized (this) {
@@ -171,31 +203,44 @@ public final class ClientNetwork implements AutoCloseable {
                 try { onDisconnect.accept(disconnectCause); }
                 catch (RuntimeException e) { System.err.println("[ClientNetwork] Disconnect listener lỗi: " + e.getMessage()); }
             }
+            synchronized(this){if(listenerThread==Thread.currentThread())listenerThread=null;}
         }
     }
 
-    private void notifyListeners(Iterable<Consumer<Packet>> packetListeners, Packet packet) {
+    private void notifyListeners(Iterable<Consumer<Packet>> packetListeners, Packet packet) throws IOException {
         if (packetListeners == null) return;
         for (Consumer<Packet> listener : packetListeners) {
             try { listener.accept(packet); }
             catch (RuntimeException e) {
-                System.err.println("[ClientNetwork] Listener lỗi: " + e.getMessage());
+                throw new IOException("Packet listener failed",e);
             }
         }
     }
 
     /** Đóng socket sẽ đánh thức thread đọc đang block và kết thúc listener. */
-    public synchronized void disconnect() {
-        running.set(false);
-        Socket active = socket;
-        socket = null;
+    public void disconnect() {
+        Socket active;Thread reader;ScheduledExecutorService guard;
+        synchronized(this){running.set(false);active=socket;socket=null;reader=listenerThread;guard=writeGuard;writeGuard=null;}
         if (active != null) {
             try { active.close(); }
             catch (IOException e) { System.err.println("[ClientNetwork] Lỗi đóng socket: " + e.getMessage()); }
         }
-        listenerThread = null;
-        receivedPackets.clear();
+        if(guard!=null)guard.shutdownNow();
+        if(reader!=null&&reader!=Thread.currentThread()){
+            reader.interrupt();
+            try{reader.join(1000);}catch(InterruptedException e){Thread.currentThread().interrupt();}
+        }
+        clearPullQueue();
     }
 
-    @Override public void close() { disconnect(); }
+    public boolean isReaderAlive(){Thread reader=listenerThread;return reader!=null&&reader.isAlive();}
+    public int listenerCount(){return listeners.size()+typedListeners.values().stream().mapToInt(java.util.List::size).sum();}
+    public long queuedBytes(){synchronized(receiveLock){return queuedBytes;}}
+    private Packet unwrap(Received received){
+        if(received==null)return null;
+        synchronized(receiveLock){if(received.generation()==queueGeneration)queuedBytes-=received.bytes();}
+        return received.packet();
+    }
+    private void clearPullQueue(){synchronized(receiveLock){receivedPackets.clear();queuedBytes=0;queueGeneration++;}}
+    @Override public void close() { disconnect();listeners.clear();typedListeners.clear();onDisconnect=error->{}; }
 }

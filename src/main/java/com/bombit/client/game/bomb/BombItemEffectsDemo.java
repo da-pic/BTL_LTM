@@ -1,7 +1,7 @@
 package com.bombit.client.game.bomb;
 
 import com.bombit.client.game.item.ItemPresentationState;
-import com.bombit.server.game.bomb.TilePosition;
+import com.bombit.server.game.model.TilePosition;
 import com.bombit.server.game.item.ItemType;
 
 import javax.swing.JFrame;

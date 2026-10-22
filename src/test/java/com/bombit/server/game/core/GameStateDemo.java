@@ -1,8 +1,18 @@
 
 package com.bombit.server.game.core;
 
+import com.bombit.server.game.model.TileType;
+
+import com.bombit.server.game.model.Direction;
+
+/**
+ * Demo tạo map, thêm player, đổi trạng thái nhân vật và vòng đời trận.
+ * Các thao tác trực tiếp trên state ở đây minh họa API trong môi trường local;
+ * khi chạy trận thực tế phải đưa thay đổi gameplay về GameLoop.
+ */
 public class GameStateDemo {
 
+    // Mục đích: Chạy các bước kiểm tra của GameStateDemo; xem chú thích tại từng kịch bản và kết quả console.
     public static void main(String[] args) {
 
         // 1. Tao ban do 8 cot, 6 hang, moi o 32 pixel
@@ -10,25 +20,25 @@ public class GameStateDemo {
 
         // 2. Tao tuong bao quanh ban do
         for (int x = 0; x < map.getWidthInTiles(); x++) {
-            map.setTile(x, 0, GameMap.TileType.HARD_WALL);
+            map.setTile(x, 0, TileType.HARD_WALL);
             map.setTile(
                     x,
                     map.getHeightInTiles() - 1,
-                    GameMap.TileType.HARD_WALL
+                    TileType.HARD_WALL
             );
         }
 
         for (int y = 0; y < map.getHeightInTiles(); y++) {
-            map.setTile(0, y, GameMap.TileType.HARD_WALL);
+            map.setTile(0, y, TileType.HARD_WALL);
             map.setTile(
                     map.getWidthInTiles() - 1,
                     y,
-                    GameMap.TileType.HARD_WALL
+                    TileType.HARD_WALL
             );
         }
 
         // 3. Dat mot block co the pha tai cot 3, hang 2
-        map.setTile(3, 2, GameMap.TileType.BREAKABLE_BLOCK);
+        map.setTile(3, 2, TileType.BREAKABLE_BLOCK);
 
         System.out.println("=== KIEM TRA GAME MAP ===");
         System.out.println(
@@ -41,7 +51,7 @@ public class GameStateDemo {
                 "Chieu cao pixel: " + map.getPixelHeight());
 
         System.out.println(
-                "O (3,2): " + map.getTile(3, 2));
+                "O (3,2): " + map.tileAt(3, 2));
         System.out.println(
                 "O (1,1) di qua duoc: "
                         + map.isWalkable(1, 1));
@@ -72,7 +82,7 @@ public class GameStateDemo {
                 "Tim Player 99: " + state.getPlayer(99));
 
         // 6. Cap nhat trang thai P1
-        p1.setDirection(Player.Direction.RIGHT);
+        p1.setDirection(Direction.RIGHT);
         p1.setMoving(true);
         p1.setPosition(40, 32);
 
@@ -84,7 +94,7 @@ public class GameStateDemo {
         System.out.println(
                 "Pha block lan 1: " + map.destroyBlock(3, 2));
         System.out.println(
-                "Loai o sau khi pha: " + map.getTile(3, 2));
+                "Loai o sau khi pha: " + map.tileAt(3, 2));
         System.out.println(
                 "Pha block lan 2: " + map.destroyBlock(3, 2));
 

@@ -12,7 +12,8 @@ import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 
 public final class ChatHandler implements AutoCloseable {
-    public static final short CHAT_MESSAGE_TYPE = 0x0050;
+    private final java.util.concurrent.atomic.AtomicReference<Throwable> failure=new java.util.concurrent.atomic.AtomicReference<>();
+    public static final short CHAT_MESSAGE_TYPE = com.bombit.common.protocol.PacketType.CHAT;
 
     private final RoomManager roomManager;
     private final OutboundSender sender;
@@ -28,7 +29,7 @@ public final class ChatHandler implements AutoCloseable {
         this.worker.start();
     }
 
-    public boolean enqueue(ChatMessage message) {
+    public synchronized boolean enqueue(ChatMessage message) {
         return running && queue.offer(message);
     }
 
@@ -40,25 +41,36 @@ public final class ChatHandler implements AutoCloseable {
                 if (room == null) {
                     continue;
                 }
-                byte[] payload = ("[" + message.senderName() + "]: " + message.message())
-                        .getBytes(StandardCharsets.UTF_8);
+                if (message.senderId() == null || room.getPlayersSnapshot().stream().noneMatch(p ->
+                        p.getPlayerId().equals(message.senderId()) && p.getState() != SessionState.DISCONNECTED
+                                && p.getState() != SessionState.CLOSED)) continue;
+                var packet = com.bombit.common.protocol.LobbyPacketCodec.chat(
+                        new com.bombit.common.protocol.LobbyPacketCodec.Chat(message.roomId(), message.senderId(),
+                                message.senderName(), message.message()));
                 for (Session session : room.getPlayersSnapshot()) {
                     if (session.getState() != SessionState.DISCONNECTED
                             && session.getState() != SessionState.CLOSED
                             && session.getOutboundSender() != null) {
-                        sender.send(session, new OutboundMessage(CHAT_MESSAGE_TYPE, payload));
+                        try{sender.send(session,OutboundMessage.fromPacket(packet));}
+                        catch(RuntimeException e){failure.compareAndSet(null,e);}
                     }
                 }
             } catch (InterruptedException interrupted) {
                 Thread.currentThread().interrupt();
                 break;
+            } catch(RuntimeException e){failure.compareAndSet(null,e);
             }
         }
     }
 
     @Override
     public void close() {
-        running = false;
+        synchronized(this){running=false;queue.clear();}
         worker.interrupt();
+        if (Thread.currentThread() != worker) try { worker.join(2000); }
+        catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); }
     }
+    public boolean isAlive(){return worker.isAlive();}
+    public int pendingMessages(){return queue.size();}
+    public java.util.Optional<Throwable> failure(){return java.util.Optional.ofNullable(failure.get());}
 }

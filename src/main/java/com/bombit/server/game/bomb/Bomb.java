@@ -1,5 +1,7 @@
 package com.bombit.server.game.bomb;
 
+import com.bombit.server.game.model.TilePosition;
+
 import java.util.Objects;
 
 /** Thực thể bom do server nắm quyền quyết định. */

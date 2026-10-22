@@ -1,6 +1,6 @@
 package com.bombit.server.game.item;
 
-import com.bombit.server.game.bomb.TilePosition;
+import com.bombit.server.game.model.TilePosition;
 
 import java.util.Optional;
 

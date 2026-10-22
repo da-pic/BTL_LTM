@@ -1,6 +1,6 @@
 package com.bombit.client.game.bomb;
 
-import com.bombit.server.game.bomb.TilePosition;
+import com.bombit.server.game.model.TilePosition;
 
 import java.util.Collection;
 import java.util.List;
@@ -41,5 +41,9 @@ public final class BombPresentationState {
     public void replaceBombs(Collection<BombView> snapshotBombs) {
         bombs.clear();
         snapshotBombs.forEach(bomb -> bombs.put(bomb.bombId(), bomb));
+    }
+    public void replaceExplosions(Collection<ExplosionView> snapshotExplosions) {
+        explosions.clear();
+        snapshotExplosions.forEach(e->explosions.put(e.bombId(),e));
     }
 }

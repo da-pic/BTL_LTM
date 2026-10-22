@@ -10,7 +10,7 @@ import java.util.concurrent.atomic.AtomicReference;
 public final class Session {
     private final String playerId;
     private final String reconnectToken;
-    private final String username;
+    private volatile String username;
     private final AtomicReference<SessionState> state = new AtomicReference<>(SessionState.CONNECTED);
     private volatile Socket socket;
     private volatile String roomId;
@@ -37,6 +37,14 @@ public final class Session {
     public SessionState getState() { return state.get(); }
     public long getLastHeartbeatNanos() { return lastHeartbeatNanos; }
     public OutboundSender getOutboundSender() { return outboundSender; }
+
+    /** A provisional connection becomes a lobby session exactly once after validated CONNECT. */
+    public synchronized void completeHandshake(String name) {
+        if (state.get() != SessionState.CONNECTED) throw new IllegalStateException("Already connected");
+        username = requireText(name, "username");
+        updateHeartbeat();
+        state.set(SessionState.IN_LOBBY);
+    }
 
     public void setRoomId(String roomId) { this.roomId = roomId; }
     public void setOutboundSender(OutboundSender sender) { this.outboundSender = sender; }

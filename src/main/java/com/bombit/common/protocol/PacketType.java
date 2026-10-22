@@ -18,6 +18,7 @@ public final class PacketType {
     public static final short GAME_STARTED = 0x0015;
     public static final short LEAVE_ROOM = 0x0016;
     public static final short CHAT = 0x0017;
+    public static final short LIST_ROOMS = 0x0018;
     public static final short MOVE = 0x0020;
     public static final short PLANT_BOMB = 0x0021;
     public static final short BOMB_PLANTED = 0x0022;
@@ -29,6 +30,9 @@ public final class PacketType {
     public static final short GAME_OVER = 0x0031;
     public static final short PLAYER_DISCONNECTED = 0x0032;
     public static final short FULL_STATE_SYNC = 0x0033;
+    /** C->S resync request; protocol 2 requires the current match envelope. */
+    public static final short REQUEST_FULL_STATE = 0x0034;
+    public static final short END_GAME = 0x0035;
     public static final short PING = 0x0040;
     public static final short PONG = 0x0041;
     public static final short DISCONNECT = 0x0042;
@@ -45,12 +49,14 @@ public final class PacketType {
         names.put(ROOM_STATE, "ROOM_STATE"); names.put(READY, "READY");
         names.put(START_GAME, "START_GAME"); names.put(GAME_STARTED, "GAME_STARTED");
         names.put(LEAVE_ROOM, "LEAVE_ROOM"); names.put(CHAT, "CHAT");
+        names.put(LIST_ROOMS, "LIST_ROOMS"); names.put(END_GAME, "END_GAME");
         names.put(MOVE, "MOVE"); names.put(PLANT_BOMB, "PLANT_BOMB");
         names.put(BOMB_PLANTED, "BOMB_PLANTED"); names.put(BOMB_EXPLODE, "BOMB_EXPLODE");
         names.put(ITEM_SPAWN, "ITEM_SPAWN"); names.put(ITEM_PICKED_UP, "ITEM_PICKED_UP");
         names.put(PLAYER_DIE, "PLAYER_DIE"); names.put(GAME_SNAPSHOT, "GAME_SNAPSHOT");
         names.put(GAME_OVER, "GAME_OVER"); names.put(PLAYER_DISCONNECTED, "PLAYER_DISCONNECTED");
-        names.put(FULL_STATE_SYNC, "FULL_STATE_SYNC"); names.put(PING, "PING");
+        names.put(FULL_STATE_SYNC, "FULL_STATE_SYNC"); names.put(REQUEST_FULL_STATE, "REQUEST_FULL_STATE");
+        names.put(PING, "PING");
         names.put(PONG, "PONG"); names.put(DISCONNECT, "DISCONNECT");
         names.put(RECONNECT, "RECONNECT"); names.put(NETWORK_LOST, "NETWORK_LOST");
         names.put(ERROR, "ERROR");

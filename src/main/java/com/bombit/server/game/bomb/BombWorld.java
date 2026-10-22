@@ -1,5 +1,8 @@
 package com.bombit.server.game.bomb;
 
+import com.bombit.server.game.model.TilePosition;
+import com.bombit.server.game.model.TileType;
+
 import java.util.Collection;
 import java.util.Optional;
 
@@ -35,4 +38,6 @@ public interface BombWorld {
     Collection<String> alivePlayersAt(TilePosition position);
 
     void killPlayer(String playerId, String killerPlayerId);
+    /** Damage policy may absorb a hit or respawn; elimination is checked after this call. */
+    default void damagePlayer(String playerId,String killerPlayerId){killPlayer(playerId,killerPlayerId);}
 }

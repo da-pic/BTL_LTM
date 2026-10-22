@@ -1,41 +1,101 @@
 package com.bombit.server.network;
 
-import com.bombit.server.session.Session;
-import com.bombit.server.session.SessionManager;
-
-import java.io.IOException;
-import java.io.InputStream;
+import com.bombit.common.protocol.*;
+import com.bombit.server.dispatch.MessageRouter;
+import com.bombit.server.dispatch.SessionHandlers;
+import com.bombit.server.dispatch.RequestRejectedException;
+import com.bombit.server.session.*;
+import java.io.*;
 import java.net.Socket;
+import java.net.SocketTimeoutException;
+import java.util.concurrent.TimeUnit;
 
+/** Decode complete frames, gate handshake, then route using the server-owned session ID. */
 public final class ClientHandler implements Runnable {
     private final Socket socket;
     private final Session session;
-    private final SessionManager sessionManager;
+    private final SessionManager sessions;
+    private final ConnectionManager connections;
+    private final MessageRouter router;
+    private final SessionWriter writer;
+    private final int frameTimeoutMillis;
+    private final InboundRateLimiter limits=new InboundRateLimiter();
+    private final java.util.function.Consumer<Throwable> failures;
 
-    public ClientHandler(Socket socket, Session session, SessionManager sessionManager) {
-        this.socket = socket;
-        this.session = session;
-        this.sessionManager = sessionManager;
+    public ClientHandler(Socket socket, Session session, SessionManager sessions,
+                         ConnectionManager connections, MessageRouter router, SessionWriter writer,
+                         int frameTimeoutMillis) {
+        this(socket,session,sessions,connections,router,writer,frameTimeoutMillis,e->{});
     }
-
-    @Override
-    public void run() {
-        try (socket; InputStream input = socket.getInputStream()) {
-            byte[] buffer = new byte[4096];
-            int read;
-            while ((read = input.read(buffer)) != -1) {
-                if (read > 0) {
-                    // Interim: any received bytes count as liveness until the router parses PING.
-                    session.updateHeartbeat();
+    public ClientHandler(Socket socket,Session session,SessionManager sessions,ConnectionManager connections,
+                         MessageRouter router,SessionWriter writer,int frameTimeoutMillis,java.util.function.Consumer<Throwable> failures){
+        this.socket=socket; this.session=session; this.sessions=sessions; this.connections=connections;
+        this.router=router; this.writer=writer; this.frameTimeoutMillis=frameTimeoutMillis;
+        this.failures=failures;
+    }
+    @Override public void run() {
+        boolean hardDrop = false, drain = false;
+        try {
+            while (session.getSocket() == socket && !socket.isClosed()) {
+                Packet packet = readFrame();
+                if (session.getSocket() != socket) break;
+                var limit=limits.check(packet.getType(),System.nanoTime());
+                if(limit!=InboundRateLimiter.Decision.ALLOW){
+                    error("RATE_LIMITED");
+                    if(limit==InboundRateLimiter.Decision.CLOSE){hardDrop=true;drain=true;break;}
+                    continue;
                 }
-                // PacketDecoder/MessageRouter will be connected here by Giang.
+                boolean pending = session.getState() == SessionState.CONNECTED;
+                if (pending && packet.getType() != PacketType.CONNECT) {
+                    error("NOT_CONNECTED"); hardDrop=true; drain=true; break;
+                }
+                if (!pending && packet.getType() == PacketType.CONNECT) {
+                    error("INVALID_PACKET"); continue;
+                }
+                try {
+                    if (!router.route(session.getPlayerId(), packet)) { error("UNKNOWN_MESSAGE"); continue; }
+                    if (packet.getType() != PacketType.CONNECT) session.updateHeartbeat();
+                    if (packet.getType() == PacketType.DISCONNECT) { hardDrop=true; drain=true; break; }
+                } catch (SessionHandlers.UnsupportedVersionException unsupported) {
+                    error("UNSUPPORTED_VERSION"); hardDrop=true; drain=true; break;
+                } catch (RequestRejectedException rejected) {
+                    error(rejected.code());
+                } catch (IllegalArgumentException invalid) {
+                    error("INVALID_PACKET");
+                    if (pending) { hardDrop=true; drain=true; break; }
+                } catch (RuntimeException failed) {
+                    failures.accept(failed);error("SERVER_ERROR");hardDrop=true;drain=true;break;
+                }
             }
-        } catch (IOException error) {
-            // Sockets closed by reconnect or cleanup also end up here.
+        } catch (ProtocolException invalidFrame) {
+            hardDrop = true; // Invalid length/UTF-8: do not attempt to recover frame boundaries.
+        } catch (IOException disconnected) {
+            // EOF, truncated frame and timeouts all end this captured connection.
         } finally {
+            if (drain) writer.finishAndAwait();
             if (session.getSocket() == socket) {
-                sessionManager.handleUnexpectedDisconnect(session.getPlayerId());
+                if (hardDrop || session.getState() == SessionState.CONNECTED) sessions.hardDrop(session.getPlayerId());
+                else sessions.handleUnexpectedDisconnect(session.getPlayerId());
             }
+            connections.release(session.getPlayerId(), socket);
+            try { socket.close(); } catch (IOException ignored) { }
         }
+    }
+    private void error(String code) {
+        try { writer.send(session, OutboundMessage.fromPacket(SessionPacketCodec.error(code))); }
+        catch (IllegalStateException closedWriter) { /* Writer failure already closes and cleans this connection. */ }
+    }
+    private Packet readFrame() throws IOException {
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(frameTimeoutMillis);
+        InputStream input = new FilterInputStream(socket.getInputStream()) {
+            private void remaining() throws IOException {
+                long nanos = deadline - System.nanoTime();
+                if (nanos <= 0) throw new SocketTimeoutException("Frame deadline exceeded");
+                socket.setSoTimeout((int) Math.max(1, TimeUnit.NANOSECONDS.toMillis(nanos)));
+            }
+            @Override public int read() throws IOException { remaining(); return in.read(); }
+            @Override public int read(byte[] b, int off, int len) throws IOException { remaining(); return in.read(b, off, len); }
+        };
+        return PacketDecoder.decode(input);
     }
 }

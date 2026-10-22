@@ -5,6 +5,42 @@ target/
 hs_err_pid*
 bin/
 out/
+/build/
+.gradle/
+replay_pid*
+*.hprof
+*.jfr
+
+# Release artifacts copied to the repository root (publish ZIPs via GitHub Releases)
+/*.jar
+/*.war
+/*.ear
+/*.zip
+/*.7z
+/*.tar
+/*.tar.gz
+/*.sha256
+/release/
+/releases/
+
+# Local environment, credentials and private keys
+.env
+.env.*
+!.env.example
+!.env.sample
+!.env.template
+/.aws/
+/.ssh/
+/secrets/
+/*.pem
+/*.key
+/*.p12
+/*.pfx
+/*.jks
+/*.keystore
+
+# Local coding-agent state; keep AGENTS.md and shared project instructions versioned
+/.codex/
 
 # IDE
 .idea/
@@ -27,3 +63,15 @@ out/
 # OS
 .DS_Store
 Thumbs.db
+Desktop.ini
+
+# Editor / temporary files
+*.swp
+*.swo
+*~
+*.tmp
+*.temp
+*.bak
+
+# Keep source, scripts, .github workflows and docs/measurements/*.csv versioned.
+# Runtime measurements, previews and release packages are generated under target/ above.
