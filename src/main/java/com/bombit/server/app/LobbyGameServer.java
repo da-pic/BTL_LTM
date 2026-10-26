@@ -266,9 +266,52 @@ public final class LobbyGameServer implements AutoCloseable, GameEventSink {
         catch(IllegalStateException unavailable) { return false; }
     }
     private static RequestRejectedException reject(String code) { return new RequestRejectedException(code); }
-    @Override public synchronized void onPlayerDisconnected(Session s) { leave(s); }
-    @Override public synchronized void onPlayerHardDropped(Session s) { leave(s); }
-    @Override public void onPlayerReconnected(Session s) { }
+    private volatile boolean seamlessRecovery = false;
+    public void setSeamlessRecovery(boolean enabled) { this.seamlessRecovery = enabled; }
+    public boolean isSeamlessRecovery() { return seamlessRecovery; }
+
+    @Override public synchronized void onPlayerDisconnected(Session s) {
+        String roomId = s.getRoomId();
+        Match match = roomId == null ? null : matches.get(roomId);
+        if (seamlessRecovery && match != null && match.active) {
+            int playerNum = match.context.playerId(s.getPlayerId()).orElse(-1);
+            if (playerNum > 0) {
+                match.game.submit(new PlayerDisconnectedCommand(playerNum, false));
+            }
+            return;
+        }
+        leave(s);
+    }
+    @Override public synchronized void onPlayerHardDropped(Session s) {
+        String roomId = s.getRoomId();
+        Match match = roomId == null ? null : matches.get(roomId);
+        if (match != null && match.active) {
+            int playerNum = match.context.playerId(s.getPlayerId()).orElse(-1);
+            if (playerNum > 0) {
+                match.game.submit(new PlayerDisconnectedCommand(playerNum, true));
+            }
+        }
+        leave(s);
+    }
+    @Override public synchronized void onPlayerReconnected(Session s) {
+        String roomId = s.getRoomId();
+        Match match = roomId == null ? null : matches.get(roomId);
+        if (match != null && match.active) {
+            int playerNum = match.context.playerId(s.getPlayerId()).orElse(-1);
+            if (playerNum > 0) {
+                match.game.submit(new PlayerReconnectedCommand(playerNum));
+            }
+            var roster = match.roster;
+            var names = new HashMap<String, String>();
+            for (Session p : roster) names.put(p.getPlayerId(), p.getUsername());
+            Packet started = DemoPacketCodec.started(match.context, names);
+            send(s, started);
+            var latest = match.game.createUpdate();
+            match.barrier = latest == null ? -1L : latest.getTick();
+            match.game.requestFullState();
+            match.initialized.add(s.getPlayerId());
+        }
+    }
     public void start() throws IOException { server.start(); }
     public int port() { return server.getPort(); }
     public Server transport() { return server; }
