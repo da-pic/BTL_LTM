@@ -1,6 +1,7 @@
 package com.bombit.common.protocol;
 
 import com.bombit.common.dto.MatchContext;
+import com.bombit.common.dto.MapTheme;
 import java.util.*;
 import java.util.regex.Pattern;
 
@@ -8,14 +9,15 @@ import java.util.regex.Pattern;
 public final class DemoPacketCodec {
     private static final String UUID_TEXT = "([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})";
     private static final Pattern START = Pattern.compile("\\{\"roomId\":\"" + UUID_TEXT
-            + "\",\"matchId\":\"" + UUID_TEXT + "\",\"tickMillis\":50,\"inputStepMillis\":50,\"mapId\":\"demo\",\"players\":\\[(.*)\\]\\}");
+            + "\",\"matchId\":\"" + UUID_TEXT + "\",\"tickMillis\":50,\"inputStepMillis\":50,\"mapId\":\"([A-Z]+)\",\"players\":\\[(.*)\\]\\}");
     private static final Pattern PLAYER = Pattern.compile("\\{\"sessionId\":\"" + UUID_TEXT
             + "\",\"playerId\":([1-4]),\"username\":\"(?:[^\"\\\\\\x00-\\x1f]|\\\\(?:[\"\\\\/bfnrt]|u[0-9a-fA-F]{4}))*\"\\}");
     private DemoPacketCodec() { }
 
     public static Packet started(MatchContext context, Map<String, String> names) {
         var json = new StringBuilder("{\"roomId\":\"").append(context.roomId()).append("\",\"matchId\":\"")
-                .append(context.matchId()).append("\",\"tickMillis\":50,\"inputStepMillis\":50,\"mapId\":\"demo\",\"players\":[");
+                .append(context.matchId()).append("\",\"tickMillis\":50,\"inputStepMillis\":50,\"mapId\":\"")
+                .append(context.mapTheme().name()).append("\",\"players\":[");
         for (var player : context.players()) {
             if (json.charAt(json.length() - 1) != '[') json.append(',');
             json.append("{\"sessionId\":\"").append(player.sessionId()).append("\",\"playerId\":")
@@ -31,7 +33,10 @@ public final class DemoPacketCodec {
         }
         var start = START.matcher(packet.getJsonPayload());
         if (!start.matches()) throw new IllegalArgumentException("Invalid game metadata");
-        String roster = start.group(3);
+        MapTheme theme;
+        try { theme=MapTheme.valueOf(start.group(3)); }
+        catch (IllegalArgumentException invalid) { throw new IllegalArgumentException("Invalid map theme",invalid); }
+        String roster = start.group(4);
         var players = new ArrayList<MatchContext.PlayerIdentity>();
         int pos = 0;
         while (pos < roster.length()) {
@@ -43,7 +48,7 @@ public final class DemoPacketCodec {
                 if (roster.charAt(pos++) != ',' || pos == roster.length()) throw new IllegalArgumentException("Invalid roster separator");
             }
         }
-        return new MatchContext(start.group(1), UUID.fromString(start.group(2)), players);
+        return new MatchContext(start.group(1), UUID.fromString(start.group(2)), theme, players);
     }
 
     public static Packet waiting(String roomId, int joined, int expected) {

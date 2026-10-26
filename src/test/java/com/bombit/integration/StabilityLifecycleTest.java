@@ -96,7 +96,7 @@ class StabilityLifecycleTest {
         var result=new HashSet<Long>();
         for(var t:Thread.getAllStackTraces().keySet())if(t.isAlive()&&(t.getName().startsWith("session-writer-")||t.getName().startsWith("GameLoop-")
                 ||t.getName().startsWith("Lobby-Snapshot-")||Set.of("server-client-reader","connection-watchdog","connection-cleanup","heartbeat-sweep",
-                "session-expiry","chat-worker","Movement-Sender","Demo-Client-Control","Client-Network-Listener","Client-Write-Watchdog").contains(t.getName())))result.add(t.getId());
+                "session-expiry","chat-worker","Movement-Sender","Game-Client-Control","Client-Network-Listener","Client-Write-Watchdog").contains(t.getName())))result.add(t.getId());
         return result;
     }
 }

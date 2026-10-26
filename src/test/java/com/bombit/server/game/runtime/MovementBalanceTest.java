@@ -2,7 +2,7 @@ package com.bombit.server.game.runtime;
 
 import com.bombit.client.game.movement.*;
 import com.bombit.server.game.core.*;
-import com.bombit.server.game.map.DefaultArenaMap;
+import com.bombit.server.game.map.ArenaGenerator;
 import com.bombit.server.game.model.*;
 import com.bombit.server.game.item.*;
 import com.bombit.server.game.bomb.BombRules;
@@ -16,7 +16,7 @@ class MovementBalanceTest {
     private static Player player(PlayerSpawn spawn){return new Player(spawn.playerId(),spawn.x(),spawn.y(),spawn.width(),spawn.height(),spawn.speed());}
     @Test void centeredSpawnsLeaveClearanceAndKeepTheCorrectCellForDifferentTileSizes(){
         var rules=new PlayerMovementRules(24,80);
-        for(int size:new int[]{32,40,48})for(var cell:DefaultArenaMap.SPAWNS){
+        for(int size:new int[]{32,40,48})for(var cell:ArenaGenerator.SPAWNS){
             var map=new GameMap(17,15,size);var p=player(rules.spawn("p",1,cell,size));
             assertEquals(cell,p.tilePosition(map));assertEquals(size/2.0,p.getX()+p.getWidth()/2-cell.x()*size);
             assertEquals(size/2.0,p.getY()+p.getHeight()/2-cell.y()*size);
@@ -26,7 +26,7 @@ class MovementBalanceTest {
         assertThrows(IllegalArgumentException.class,()->new PlayerMovementRules(24,Double.NaN));
     }
     @Test void slowerServerAndPredictionTakeTheSameCornersWithoutChangingGridGeometry(){
-        var map=DefaultArenaMap.create();var state=new GameState(map);
+        var map=ArenaGenerator.create();var state=new GameState(map);
         var p=player(new PlayerMovementRules(24,80).spawn("p",1,new TilePosition(1,1),32));state.addPlayer(p);state.startMatch();
         var full=new StateDeltaBuilder().buildUpdate(state,1,true);var world=new ClientWorldState();world.apply(full);
         var prediction=new PredictionController(new GameMap(17,15,32),full.getPlayers().getFirst());prediction.updateWorld(world);

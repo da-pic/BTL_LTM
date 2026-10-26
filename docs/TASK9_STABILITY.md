@@ -60,7 +60,7 @@ frame đang encode và dữ liệu replica. Giới hạn byte trên UI/pull là 
 không phải heap size của Java object. Giới hạn capacity pool/session được rà mã;
 chưa benchmark hệ thống ở mức trần 32/64/256 connection.
 
-Client chỉ dùng listener như DemoClientConnection tắt duplicate pull queue.
+Client chỉ dùng listener như GameClientConnection tắt duplicate pull queue.
 Controller dùng độc lập không sở hữu socket: khi controller báo lỗi, caller
 chịu trách nhiệm đóng network dùng chung; ứng dụng Demo đã nối đường này.
 
@@ -74,7 +74,7 @@ chịu trách nhiệm đóng network dùng chung; ứng dụng Demo đã nối �
 | Admission/rate/handler fault | `server/network/Server.java`, `ClientHandler.java`, `InboundRateLimiter.java` (mới) |
 | Heartbeat/session/chat | `server/heartbeat/HeartbeatManager.java`, `server/session/SessionManager.java`, `server/chat/ChatHandler.java` |
 | Client socket/queue/listener | `client/network/ClientNetwork.java` |
-| Client control/UI/lifecycle | `client/app/DemoClientConnection.java`, `client/game/movement/MovementClientController.java` |
+| Client control/UI/lifecycle | `client/app/GameClientConnection.java`, `client/game/movement/MovementClientController.java` |
 
 Không thêm handler RECONNECT, không thay schema MOVE/ACK/snapshot hoặc luật ABORTED.
 Diagnostics bổ sung: writer pendingFrames/pendingBytes, worker termination,

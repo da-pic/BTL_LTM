@@ -8,7 +8,7 @@ import java.util.OptionalInt;
 import java.util.UUID;
 
 /** Immutable mapping published in GAME_STARTED. Never accepts an identity supplied by MOVE. */
-public record MatchContext(String roomId, UUID matchId, List<PlayerIdentity> players) {
+public record MatchContext(String roomId, UUID matchId, MapTheme mapTheme, List<PlayerIdentity> players) {
     public record PlayerIdentity(String sessionId, int playerId) {
         public PlayerIdentity {
             if (sessionId == null || sessionId.isBlank() || playerId <= 0) {
@@ -20,6 +20,7 @@ public record MatchContext(String roomId, UUID matchId, List<PlayerIdentity> pla
     public MatchContext {
         if (roomId == null || roomId.isBlank()) throw new IllegalArgumentException("Missing room");
         Objects.requireNonNull(matchId, "matchId");
+        Objects.requireNonNull(mapTheme, "mapTheme");
         players = List.copyOf(players);
         if (players.isEmpty() || players.size() > IntegrationContract.MAX_PLAYERS) {
             throw new IllegalArgumentException("Match requires 1..4 players");
@@ -31,6 +32,11 @@ public record MatchContext(String roomId, UUID matchId, List<PlayerIdentity> pla
                 throw new IllegalArgumentException("Duplicate player mapping");
             }
         }
+    }
+
+    /** Compatibility constructor for fixed/demo matches. */
+    public MatchContext(String roomId, UUID matchId, List<PlayerIdentity> players) {
+        this(roomId, matchId, MapTheme.CLASSIC, players);
     }
 
     public OptionalInt playerId(String sessionId) {

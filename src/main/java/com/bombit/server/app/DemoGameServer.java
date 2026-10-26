@@ -199,7 +199,7 @@ public final class DemoGameServer implements AutoCloseable, GameEventSink {
             }
         }
     }
-    /** Legacy movement-only fixture. Lobby gameplay uses game.map.DefaultArenaMap instead. */
+    /** Legacy movement-only fixture. Lobby gameplay uses game.map.ArenaGenerator instead. */
     public static GameMap map() {
         var map = new GameMap(17, 15, 32);
         for (int y = 0; y < 15; y++) for (int x = 0; x < 17; x++) {

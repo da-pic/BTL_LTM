@@ -1,130 +1,124 @@
 package com.bombit.client.lobby;
 
-import com.bombit.client.app.DemoClientConnection;
-import com.bombit.client.game.movement.MovementGameWindow;
+import com.bombit.client.app.GameClientConnection;
+import com.bombit.client.ui.game.MovementGameWindow;
+import com.bombit.client.ui.UiTheme;
+import com.bombit.client.ui.component.PlayerSlotPanel;
+import com.bombit.client.ui.component.MapSelectionPicker;
+import com.bombit.client.ui.screen.*;
 import com.bombit.common.protocol.*;
+import com.bombit.common.dto.MapSelection;
 import javax.swing.*;
+import javax.swing.border.EmptyBorder;
+import javax.swing.table.DefaultTableModel;
 import java.awt.*;
 import java.awt.event.*;
 import java.util.*;
 
-/** One connection survives room changes and replay. All component state belongs to EDT. */
+/** Coordinates client state and navigation; screen layout lives under client.ui. */
 public final class LobbyWindow extends JFrame {
-    private final JTextField host=new JTextField(12), port=new JTextField(5), name=new JTextField(12);
-    private final JButton connect=new JButton("Connect"), create=new JButton("Create"), join=new JButton("Join"),
-            refresh=new JButton("Refresh"), ready=new JButton("Ready"), start=new JButton("Start"),
-            leave=new JButton("Leave room"), end=new JButton("End round");
-    private final JTextField roomName=new JTextField("My room",12), message=new JTextField(28);
+    private static final String LOGIN="LOGIN",BROWSE="BROWSE",ROOM="ROOM",RESULTS="RESULTS";
+    private final JTextField host=new JTextField(12),port=new JTextField(5),name=new JTextField(16);
+    private final JTextField roomName=new JTextField("Phòng của tôi",18),message=new JTextField();
     private final JSpinner capacity=new JSpinner(new SpinnerNumberModel(4,2,4,1));
-    private final DefaultListModel<String> roomRows=new DefaultListModel<>();
-    private final JList<String> roomList=new JList<>(roomRows);
-    private final JTextArea players=new JTextArea(6,32), chat=new JTextArea(10,45);
-    private final JLabel status=new JLabel("Enter server address and connect.");
+    private final MapSelectionPicker mapSelection=new MapSelectionPicker();
+    private final JButton connect=button("KẾT NỐI MÁY CHỦ",new Color(0x38,0xBD,0xF8));
+    private final JButton create=button("＋ TẠO PHÒNG MỚI",new Color(0xA8,0x55,0xF7));
+    private final JButton join=button("VÀO PHÒNG ĐANG CHỌN",new Color(0x38,0xBD,0xF8));
+    private final JButton refresh=button("LÀM MỚI DANH SÁCH",new Color(100,116,139));
+    private final JButton ready=button("SẴN SÀNG",new Color(0x22,0xC5,0x5E));
+    private final JButton start=button("BẮT ĐẦU TRẬN",new Color(0xF5,0x9E,0x0B));
+    private final JButton leave=button("RỜI PHÒNG",new Color(100,116,139));
+    private final JButton end=button("KẾT THÚC TRẬN",new Color(0xF4,0x3F,0x5E));
+    private final JButton send=UiTheme.arcadeButton("GỬI CHAT",true);
+    private final JLabel loginStatus=new JLabel("Nhập tên rồi kết nối để vào sảnh chính",SwingConstants.CENTER);
+    private final JLabel status=new JLabel("●  Đang chờ",SwingConstants.LEFT),browseServerInfo=new JLabel(),roomServerInfo=new JLabel();
+    private final JLabel connectionDetails=new JLabel(),roomTitle=new JLabel("PHÒNG CHỜ"),roomMeta=new JLabel();
+    private final DefaultTableModel roomRows=new DefaultTableModel(new Object[]{"MÃ","TÊN PHÒNG","CHỦ PHÒNG","NGƯỜI CHƠI","BẢN ĐỒ","TRẠNG THÁI"},0){@Override public boolean isCellEditable(int r,int c){return false;}};
+    private final JTable roomTable=new JTable(roomRows);
+    private final JPanel playerCards=UiTheme.panel(new GridLayout(2,2,12,12));
+    private final JTextArea chat=new JTextArea();
+    private final MatchResultsPanel resultPanel=new MatchResultsPanel();
+    private final CardLayout screens=new CardLayout();
+    private final JPanel screenRoot=new JPanel(screens);
+    private final JLabel notificationText=new JLabel();
+    private final JPanel notificationBar=new UiTheme.RoundedPanel(new BorderLayout(),new Color(127,29,29),14);
+    private final javax.swing.Timer notificationTimer=new javax.swing.Timer(4500,e->notificationBar.setVisible(false));
     private java.util.List<LobbyPacketCodec.RoomView> rooms=java.util.List.of();
     private LobbyPacketCodec.RoomView room;
-    private DemoClientConnection client;
+    private GameClientConnection client;
     private MovementGameWindow game;
-    private boolean connected;
-    private final MatchResultsPanel results=new MatchResultsPanel();
-    private final JTabbedPane tabs=new JTabbedPane();
+    private boolean connected,showingResults,updatingMapSelection;
     private final Map<Integer,String> resultNames=new HashMap<>();
 
-    public LobbyWindow(String initialHost,int initialPort,String initialName) {
-        super("Bomb It - Lobby"); host.setText(initialHost);port.setText(""+initialPort);name.setText(initialName);
-        JPanel connection=new JPanel(); connection.add(new JLabel("Host"));connection.add(host);
-        connection.add(new JLabel("Port"));connection.add(port);connection.add(new JLabel("Name"));connection.add(name);connection.add(connect);
-        JPanel browse=new JPanel(new BorderLayout());browse.add(new JScrollPane(roomList));
-        JPanel roomActions=new JPanel();roomActions.add(roomName);roomActions.add(capacity);roomActions.add(create);roomActions.add(join);roomActions.add(refresh);browse.add(roomActions,BorderLayout.SOUTH);
-        players.setEditable(false);chat.setEditable(false);
-        JPanel detail=new JPanel(new BorderLayout());detail.add(new JScrollPane(players));
-        JPanel actions=new JPanel(); for(JButton b:new JButton[]{ready,start,leave,end}) actions.add(b);detail.add(actions,BorderLayout.SOUTH);
-        JPanel middle=new JPanel(new GridLayout(1,2));middle.add(browse);middle.add(detail);
-        JPanel chatPanel=new JPanel(new BorderLayout());chatPanel.add(new JScrollPane(chat));
-        JButton send=new JButton("Send");JPanel compose=new JPanel();compose.add(message);compose.add(send);chatPanel.add(compose,BorderLayout.SOUTH);
-        tabs.addTab("Chat",chatPanel);tabs.addTab("Kết quả",results);
-        JPanel body=new JPanel(new BorderLayout());body.add(middle,BorderLayout.NORTH);body.add(tabs);
-        add(connection,BorderLayout.NORTH);add(body);add(status,BorderLayout.SOUTH);
-        connect.addActionListener(e -> connect());
-        create.addActionListener(e -> command(PacketType.CREATE_ROOM,Map.of("roomName",roomName.getText(),"maxPlayers",capacity.getValue())));
-        join.addActionListener(e -> { int index=roomList.getSelectedIndex();if(index>=0 && index<rooms.size()) command(PacketType.JOIN_ROOM,Map.of("roomId",rooms.get(index).roomId())); });
-        refresh.addActionListener(e -> command(PacketType.LIST_ROOMS,Map.of()));
-        ready.addActionListener(e -> { if(room!=null) command(PacketType.READY,Map.of("ready",!isReady())); });
-        start.addActionListener(e -> command(PacketType.START_GAME,Map.of()));
-        leave.addActionListener(e -> command(PacketType.LEAVE_ROOM,Map.of()));
-        end.addActionListener(e -> endRound());
-        send.addActionListener(e -> sendChat());message.addActionListener(e -> sendChat());
-        setDefaultCloseOperation(DO_NOTHING_ON_CLOSE);
-        addWindowListener(new WindowAdapter(){ @Override public void windowClosing(WindowEvent e) {
-            if(game!=null) game.disposeGame();if(client!=null) client.close();dispose();
-        }});
-        updateButtons();pack();setLocationByPlatform(true);
+    public LobbyWindow(String initialHost,int initialPort,String initialName){
+        super("Bomb It Multiplayer");UiTheme.install();host.setText(initialHost);port.setText(String.valueOf(initialPort));name.setText(initialName);
+        screenRoot.add(new LoginScreenPanel(host,port,name,connect,loginStatus),LOGIN);
+        screenRoot.add(new LobbyBrowserPanel(host,port,roomName,capacity,roomTable,refresh,create,join,status,browseServerInfo,connectionDetails),BROWSE);
+        screenRoot.add(new WaitingRoomPanel(roomServerInfo,roomTitle,roomMeta,mapSelection,leave,playerCards,chat,message,send,end,ready,start),ROOM);
+        screenRoot.add(new ResultsScreenPanel(resultPanel,this::returnToLobby,this::returnToRoom),RESULTS);
+        setContentPane(screenRoot);installNotificationBar();wire();refreshPlayers();
+        setDefaultCloseOperation(DO_NOTHING_ON_CLOSE);addWindowListener(new WindowAdapter(){@Override public void windowClosing(WindowEvent e){if(game!=null)game.disposeGame();if(client!=null)client.close();dispose();}});
+        pack();setSize(1180,760);setMinimumSize(new Dimension(1060,700));setLocationRelativeTo(null);updateButtons();
     }
-    private void connect() {
-        int number;try { number=Integer.parseInt(port.getText());if(number<1||number>65535) throw new NumberFormatException(); }
-        catch(NumberFormatException invalid) { status.setText("Port must be 1..65535");return; }
-        if(client!=null) client.close();connect.setEnabled(false);room=null;
-        String address=host.getText().strip(),username=name.getText();
-        DemoClientConnection next=new DemoClientConnection(SwingUtilities::invokeLater,movement -> {
-            resultNames.clear();results.clear();tabs.setSelectedIndex(0);
-            if(room!=null)for(var p:room.players())client.context().playerId(p.playerId()).ifPresent(id->resultNames.put(id,p.username()));
-            if(game!=null) game.disposeGame();
-            game=new MovementGameWindow(movement,client.localId(),() -> {
-                game=null;if(isHost()) endRound();else command(PacketType.LEAVE_ROOM,Map.of());
-            });game.setVisible(true);
-        },text -> { connected=true;status.setText(text);updateButtons(); },error -> {
-            connected=false;connect.setEnabled(true);room=null;
-            if(game!=null) { game.disposeGame();game=null; }
-            status.setText("Disconnected: "+error.getMessage());updateButtons();
-        });
-        client=next;next.setLobbyListener(this::packet);
-        Thread worker=new Thread(() -> { try { next.connect(address,number,username); } catch(Exception ignored) { } },"Lobby-Connect");
-        worker.setDaemon(true);worker.start();
+
+    private void wire(){
+        connect.addActionListener(e->connect());name.addActionListener(e->connect.doClick());
+        create.addActionListener(e->command(PacketType.CREATE_ROOM,Map.of("roomName",roomName.getText(),"maxPlayers",capacity.getValue())));
+        join.addActionListener(e->joinSelected());refresh.addActionListener(e->command(PacketType.LIST_ROOMS,Map.of()));
+        roomTable.getSelectionModel().addListSelectionListener(e->updateButtons());roomTable.addMouseListener(new MouseAdapter(){@Override public void mouseClicked(MouseEvent e){if(e.getClickCount()==2)joinSelected();}});
+        ready.addActionListener(e->{if(room!=null)command(PacketType.READY,Map.of("ready",!isReady()));});start.addActionListener(e->command(PacketType.START_GAME,Map.of()));
+        leave.addActionListener(e->command(PacketType.LEAVE_ROOM,Map.of()));end.addActionListener(e->endRound());send.addActionListener(e->sendChat());message.addActionListener(e->sendChat());
+        mapSelection.onSelectionChanged(selected->{if(!updatingMapSelection&&room!=null&&isHost())command(PacketType.SET_MAP_SELECTION,Map.of("mapSelection",selected.name()));});
     }
-    private void packet(Packet packet) {
-        switch(packet.getType()) {
-            case PacketType.LIST_ROOMS -> {
-                rooms=LobbyPacketCodec.decodeRooms(packet);roomRows.clear();
-                for(var r:rooms) roomRows.addElement(r.roomName()+"  "+r.players().size()+"/"+r.maxPlayers()+"  "+r.state());
-            }
-            case PacketType.ROOM_STATE -> {
-                room=LobbyPacketCodec.decodeRoom(packet);
-                StringBuilder text=new StringBuilder(room.roomName()+" - "+room.state()+"\n");
-                for(var p:room.players()) text.append(p.playerId().equals(room.hostId())?"[Host] ":"").append(p.username()).append("  ").append(p.state()).append('\n');
-                players.setText(text.toString());
-            }
-            case PacketType.LEAVE_ROOM -> { room=null;players.setText("");chat.setText(""); }
-            case PacketType.CHAT -> { var c=LobbyPacketCodec.decodeChat(packet);if(room!=null&&room.roomId().equals(c.roomId())) { chat.append(c.username()+": "+c.message()+"\n");if(chat.getDocument().getLength()>20000) chat.setText(chat.getText().substring(10000)); } }
-            case PacketType.GAME_OVER -> {
-                if(game!=null) { game.disposeGame();game=null; }
-                results.showResult(client.lastResult(),resultNames);tabs.setSelectedComponent(results);
-                status.setText("Round ended. Ready again to replay, or leave for lobby.");
-            }
-            case PacketType.ERROR -> status.setText("Request rejected: "+SessionPacketCodec.errorCode(packet));
-            default -> { }
-        }
+    private void returnToLobby(){showingResults=false;if(room!=null)command(PacketType.LEAVE_ROOM,Map.of());else screens.show(screenRoot,BROWSE);}
+    private void returnToRoom(){showingResults=false;screens.show(screenRoot,ROOM);}
+    private void joinSelected(){int row=roomTable.getSelectedRow();if(row>=0&&row<rooms.size())command(PacketType.JOIN_ROOM,Map.of("roomId",rooms.get(row).roomId()));}
+
+    private void connect(){
+        int number;try{number=Integer.parseInt(port.getText());if(number<1||number>65535)throw new NumberFormatException();}catch(NumberFormatException e){setStatus("Cổng phải nằm trong khoảng 1–65535",false);return;}
+        String address=host.getText().strip(),username=name.getText().strip();if(username.isBlank()){setStatus("Vui lòng nhập tên người chơi",false);name.requestFocusInWindow();return;}
+        if(client!=null)client.close();connect.setEnabled(false);setStatus("Đang kết nối...",true);
+        GameClientConnection next=new GameClientConnection(SwingUtilities::invokeLater,movement->{
+            showingResults=false;resultNames.clear();resultPanel.clear();if(room!=null)for(var p:room.players())client.context().playerId(p.playerId()).ifPresent(id->resultNames.put(id,p.username()));
+            if(game!=null)game.disposeGame();game=new MovementGameWindow(movement,client.localId(),client.context().mapTheme(),()->{game=null;if(isHost())endRound();else command(PacketType.LEAVE_ROOM,Map.of());});game.setVisible(true);
+        },text->{boolean first=!connected;connected=true;setStatus(text,true);String info="●  "+username+"  •  "+address+":"+number;browseServerInfo.setText(info);roomServerInfo.setText(info);connectionDetails.setText("Host: "+address+"     •     Port: "+number+"     •     Tên nhân vật: "+username);if(first)screens.show(screenRoot,BROWSE);updateButtons();},
+        error->{connected=false;showingResults=false;connect.setEnabled(true);room=null;if(game!=null){game.disposeGame();game=null;}setStatus("Mất kết nối: "+error.getMessage(),false);screens.show(screenRoot,LOGIN);updateButtons();});
+        client=next;next.setLobbyListener(p->{if(p.getType()==PacketType.ROOM_STATE)syncMapSelection(LobbyPacketCodec.decodeRoom(p));packet(p);});Thread worker=new Thread(()->{try{next.connect(address,number,username);}catch(Exception ignored){ }},"Lobby-Connect");worker.setDaemon(true);worker.start();
+    }
+
+    private void syncMapSelection(LobbyPacketCodec.RoomView state){
+        updatingMapSelection=true;
+        try{mapSelection.setSelection(state.mapSelection());mapSelection.setEnabled(state.state().equals("WAITING")&&client!=null&&state.hostId().equals(client.sessionId()));}
+        finally{updatingMapSelection=false;}
+    }
+
+    private void packet(Packet packet){switch(packet.getType()){
+        case PacketType.LIST_ROOMS->{rooms=LobbyPacketCodec.decodeRooms(packet);roomRows.setRowCount(0);for(var r:rooms){String hostName=r.players().stream().filter(p->p.playerId().equals(r.hostId())).map(LobbyPacketCodec.Player::username).findFirst().orElse("—");roomRows.addRow(new Object[]{shortId(r.roomId()),r.roomName(),hostName,r.players().size()+"/"+r.maxPlayers(),r.mapSelection().label(),stateName(r.state())});}}
+        case PacketType.ROOM_STATE->{room=LobbyPacketCodec.decodeRoom(packet);roomTitle.setText("PHÒNG CHỜ: "+room.roomName());roomMeta.setText(shortId(room.roomId())+"  •  "+room.players().size()+"/"+room.maxPlayers()+" người  •  "+stateName(room.state()));refreshPlayers();if(!showingResults)screens.show(screenRoot,ROOM);}
+        case PacketType.LEAVE_ROOM->{showingResults=false;room=null;chat.setText("");screens.show(screenRoot,BROWSE);command(PacketType.LIST_ROOMS,Map.of());}
+        case PacketType.CHAT->{var c=LobbyPacketCodec.decodeChat(packet);if(room!=null&&room.roomId().equals(c.roomId())){chat.append(c.username()+":  "+c.message()+"\n");chat.setCaretPosition(chat.getDocument().getLength());}}
+        case PacketType.GAME_OVER->{if(game!=null){game.disposeGame();game=null;}resultPanel.showResult(client.lastResult(),resultNames,client.localId());showingResults=true;screens.show(screenRoot,RESULTS);toFront();requestFocus();setStatus("Trận đấu đã kết thúc",true);}
+        case PacketType.ERROR->{String code=SessionPacketCodec.errorCode(packet);if(!("NOT_PLAYING".equals(code)&&showingResults))setStatus(errorMessage(code),false);}default->{}}
         updateButtons();
     }
-    private void sendChat() { if(room!=null&&!message.getText().isBlank()) { command(PacketType.CHAT,Map.of("message",message.getText()));message.setText(""); } }
-    private void command(short type,Map<String,?> body) {
-        if(client==null||!connected) return;
-        var fields=new LinkedHashMap<String,Object>(body);
-        if(room!=null&&(type==PacketType.READY||type==PacketType.START_GAME||type==PacketType.CHAT||type==PacketType.LEAVE_ROOM)) fields.put("roomId",room.roomId());
-        if(type==PacketType.CREATE_ROOM) fields.put("mode","STANDARD");
-        client.send(LobbyPacketCodec.packet(type,fields));
-    }
-    private void endRound() {
-        if(client==null||client.context()==null) return;
-        try { client.send(MatchEnvelopeCodec.wrap(client.context().matchId(),new Packet(PacketType.END_GAME,"{}"))); }
-        catch(java.io.IOException error) { status.setText(error.getMessage()); }
-    }
-    private boolean isHost() { return room!=null&&client!=null&&room.hostId().equals(client.sessionId()); }
-    private boolean isReady() { return room!=null&&room.players().stream().anyMatch(p -> p.playerId().equals(client.sessionId())&&p.state().equals("READY")); }
-    private void updateButtons() {
-        boolean waiting=connected&&room!=null&&room.state().equals("WAITING");
-        create.setEnabled(connected&&room==null);join.setEnabled(connected&&room==null);refresh.setEnabled(connected);
-        ready.setEnabled(waiting);ready.setText(isReady()?"Unready":"Ready");
-        start.setEnabled(waiting&&isHost());leave.setEnabled(connected&&room!=null);
-        end.setEnabled(connected&&room!=null&&isHost()&&!waiting);message.setEnabled(connected&&room!=null);
-        host.setEnabled(!connected);port.setEnabled(!connected);name.setEnabled(!connected);
-    }
+
+    private void refreshPlayers(){playerCards.removeAll();if(room!=null)for(var p:room.players())playerCards.add(playerCard(p,p.playerId().equals(room.hostId())));for(int i=room==null?0:room.players().size();i<4;i++){JPanel empty=new UiTheme.RoundedPanel(new GridBagLayout(),new Color(15,23,41),14);JLabel waiting=new JLabel("＋  Đang chờ người chơi");waiting.setForeground(UiTheme.MUTED);empty.add(waiting);playerCards.add(empty);}playerCards.revalidate();playerCards.repaint();}
+    private JPanel playerCard(LobbyPacketCodec.Player p,boolean hostPlayer){boolean local=client!=null&&p.playerId().equals(client.sessionId());return new PlayerSlotPanel(p.username()+(local?" (Bạn)":""),hostPlayer?"Chủ phòng":"Thành viên",p.state().equals("READY"),playerSlotColor(room==null?0:room.players().indexOf(p)));}
+    private static Color playerSlotColor(int index){return switch(Math.floorMod(index,4)){case 0->new Color(0x38,0xBD,0xF8);case 1->new Color(0xF4,0x3F,0x5E);case 2->new Color(0x22,0xC5,0x5E);default->new Color(0xF5,0x9E,0x0B);};}
+    private String shortId(String id){return "#"+id.substring(0,Math.min(8,id.length())).toUpperCase(Locale.ROOT);}
+    private void sendChat(){if(room!=null&&!message.getText().isBlank()){command(PacketType.CHAT,Map.of("message",message.getText().strip()));message.setText("");}}
+    private void command(short type,Map<String,?> body){if(client==null||!connected)return;var fields=new LinkedHashMap<String,Object>(body);if(room!=null&&(type==PacketType.READY||type==PacketType.START_GAME||type==PacketType.SET_MAP_SELECTION||type==PacketType.CHAT||type==PacketType.LEAVE_ROOM))fields.put("roomId",room.roomId());if(type==PacketType.CREATE_ROOM)fields.put("mode","STANDARD");client.send(LobbyPacketCodec.packet(type,fields));}
+    private void endRound(){if(client==null||client.context()==null)return;try{client.send(MatchEnvelopeCodec.wrap(client.context().matchId(),new Packet(PacketType.END_GAME,"{}")));}catch(java.io.IOException e){setStatus(e.getMessage(),false);}}
+    private boolean isHost(){return room!=null&&client!=null&&room.hostId().equals(client.sessionId());}
+    private boolean isReady(){return room!=null&&room.players().stream().anyMatch(p->p.playerId().equals(client.sessionId())&&p.state().equals("READY"));}
+    private void updateButtons(){boolean waiting=connected&&room!=null&&room.state().equals("WAITING");create.setEnabled(connected&&room==null);join.setEnabled(connected&&room==null&&roomTable.getSelectedRow()>=0);refresh.setEnabled(connected);ready.setEnabled(waiting);ready.setText(isReady()?"HỦY SẴN SÀNG":"SẴN SÀNG");start.setEnabled(waiting&&isHost());leave.setEnabled(connected&&room!=null);end.setEnabled(connected&&room!=null&&isHost()&&!waiting);message.setEnabled(connected&&room!=null);connect.setEnabled(!connected);}
+    private String stateName(String state){return switch(state){case "WAITING"->"Đang chờ";case "READY"->"Sẵn sàng";case "PLAYING"->"Đang đấu";case "CONNECTED"->"Chưa sẵn sàng";default->state;};}
+
+    private void installNotificationBar(){notificationBar.setBorder(new EmptyBorder(12,18,12,18));notificationText.setForeground(Color.WHITE);notificationText.setFont(UiTheme.BODY.deriveFont(Font.BOLD,13f));notificationBar.add(notificationText);notificationBar.setVisible(false);getLayeredPane().add(notificationBar,JLayeredPane.POPUP_LAYER);addComponentListener(new ComponentAdapter(){@Override public void componentResized(ComponentEvent e){positionNotification();}});notificationTimer.setRepeats(false);}
+    private void positionNotification(){int width=Math.min(660,Math.max(320,getWidth()-48));notificationBar.setBounds((getWidth()-width)/2,18,width,46);}
+    private void showErrorBar(String text){notificationText.setText("⚠  "+text);positionNotification();notificationBar.setVisible(true);notificationBar.repaint();notificationTimer.restart();}
+    private String errorMessage(String code){return switch(code){case "ROOM_FULL"->"Phòng đã đầy, không thể tham gia.";case "ROOM_PLAYING"->"Phòng đang chơi, vui lòng chờ trận đấu kết thúc.";case "NOT_READY"->"Chưa thể bắt đầu: vẫn còn thành viên chưa sẵn sàng.";case "NOT_PLAYING"->"Lệnh trận đấu đã bị bỏ qua vì trận đấu đã kết thúc hoặc chưa bắt đầu.";case "NOT_HOST"->"Chỉ chủ phòng mới có thể thực hiện thao tác này.";case "ROOM_NOT_FOUND"->"Phòng không còn tồn tại.";case "ALREADY_IN_ROOM"->"Bạn đang ở trong một phòng khác.";case "NOT_IN_ROOM"->"Bạn không còn ở trong phòng này.";case "ROOM_LIMIT"->"Máy chủ đã đạt giới hạn số phòng.";case "RATE_LIMITED"->"Bạn thao tác quá nhanh, vui lòng thử lại.";case "CHAT_QUEUE_FULL","INPUT_QUEUE_FULL"->"Máy chủ đang bận, vui lòng thử lại.";case "MATCH_START_FAILED"->"Không thể khởi động trận đấu.";default->"Yêu cầu bị từ chối ("+code+").";};}
+    private void setStatus(String text,boolean ok){status.setText((ok?"●  ":"⚠  ")+text);status.setForeground(ok?UiTheme.ACCENT:UiTheme.DANGER);loginStatus.setText(text);loginStatus.setForeground(ok?UiTheme.ACCENT:UiTheme.DANGER);if(!ok)showErrorBar(text);}
+    private static JButton button(String text,Color color){return UiTheme.arcadeButton(text,color);}
 }

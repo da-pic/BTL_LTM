@@ -77,7 +77,7 @@ CONNECT/ACK → tự vào phòng demo → đủ roster → startGame → GAME_ST
   được dùng để rewind hoặc chặn server; response là full mới hơn mốc publish server tại lúc yêu cầu.
 - Full resync phát tới mọi client cùng baseline, qua FULL_STATE_SYNC. Client nghe cả hai loại
   snapshot, bỏ packet khác match, giữ world cũ khi sai baseline và tự xin full; input tạm ngưng khi cần full.
-- DemoClientConnection gắn listener trước CONNECT, đưa metadata/snapshot qua executor UI tuần tự
+- GameClientConnection gắn listener trước CONNECT, đưa metadata/snapshot qua executor UI tuần tự
   có giới hạn backlog, duy trì PING/timeout. MovementGameWindow dùng cùng controller đã nhận metadata,
   không tạo listener mới sau khi full đầu đã đi qua. Tắt queue pull trùng lặp cho client chỉ dùng listener.
 - Khi rời/mất mạng, M1 bỏ player trên game thread; còn người thì trận tiếp tục, hết người thì dọn
@@ -103,7 +103,7 @@ Gồm 36 test trước M1, 8 MovementDemoTest và 1 MovementDemoProcessTest.
 | Dọn/chơi nhóm mới | Phòng trống không còn worker/runtime hiện tại; roster sau có matchId mới |
 | Ba tiến trình thật | ServerApplication + hai ClientApplication --headless ở ba JVM; mỗi client READY players=2 và FINAL ack dương, exit 0 |
 
-Chế độ headless chạy cùng DemoClientConnection/MovementClientController như Swing, tự gửi
+Chế độ headless chạy cùng GameClientConnection/MovementClientController như Swing, tự gửi
 sample để smoke test; không mô phỏng phím hoặc chứng minh cửa sổ đã được thao tác bằng tay.
 Ví dụ, mở hai terminal khi server chờ hai người:
 
@@ -129,7 +129,7 @@ Các đường dẫn Java dưới đây tính từ src/main/java/com/bombit. Xem
 | File | Phụ trách | Thay đổi |
 |---|---|---|
 | server/app/DemoGameServer.java (mới), ServerApplication.java | TV4 tích hợp; phối hợp TV1/TV2 | Roster cố định, runtime, routing/rate limit, broadcast/resync/cleanup, launcher |
-| client/app/DemoClientConnection.java (mới), ClientApplication.java | TV4 tích hợp; phối hợp TV2 | Handshake/heartbeat, hàng đợi UI, chuyển màn hình, launcher Swing/headless |
+| client/app/GameClientConnection.java (mới), ClientApplication.java | TV4 tích hợp; phối hợp TV2 | Handshake/heartbeat, hàng đợi UI, chuyển màn hình, launcher Swing/headless |
 | common/protocol/DemoPacketCodec.java (mới), SessionPacketCodec.java | TV4 | GAME_STARTED/profile chờ, encode CONNECT/decode ACK/ERROR |
 | server/dispatch/RequestRejectedException.java (mới), SessionHandlers.java | TV4 + TV1 | Mã lỗi nghiệp vụ, hook sau ACK |
 | server/network/Server.java, ClientHandler.java | TV1 + TV4 | Hook session lifecycle, lỗi nghiệp vụ, shutdown reader trước interrupt |

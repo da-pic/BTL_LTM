@@ -32,7 +32,7 @@ public final class MovementClientController implements AutoCloseable {
     private boolean resyncPending;
     private final java.util.UUID matchId;
     private final boolean subscribed;
-    private final com.bombit.client.game.bomb.BombScene bombs=new com.bombit.client.game.bomb.BombScene();
+    private final com.bombit.client.ui.game.bomb.BombScene bombs=new com.bombit.client.ui.game.bomb.BombScene();
     private long plantRequest;
     private int respawns;
 
@@ -102,7 +102,7 @@ public final class MovementClientController implements AutoCloseable {
             reconciliation.reconcile(world,player); interpolation.record(world);
         } catch (RuntimeException e) { fail(e); }
     }
-    /** InputController gọi sau prediction; chỉ enqueue, không chặn UI bằng socket write. */
+    /** The UI input controller calls this after prediction; enqueue without blocking the EDT. */
     public void send(MovePacketCodec.Input input) {
         if(closed) throw new IllegalStateException("Movement client closed");
         enqueue(() -> {
@@ -113,7 +113,7 @@ public final class MovementClientController implements AutoCloseable {
             catch(Exception e) { fail(e); }
         });
     }
-    public com.bombit.client.game.bomb.BombScene bombs() { return bombs; }
+    public com.bombit.client.ui.game.bomb.BombScene bombs() { return bombs; }
     /** No predicted bomb or damage; wait for the authoritative snapshot. */
     public void plantBomb() {
         var local=world.getPlayers().get(localId);

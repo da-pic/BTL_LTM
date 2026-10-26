@@ -1,8 +1,9 @@
 package com.bombit.integration;
 
-import com.bombit.client.app.DemoClientConnection;
+import com.bombit.client.app.GameClientConnection;
 import com.bombit.client.network.ClientNetwork;
 import com.bombit.common.dto.MatchContext;
+import com.bombit.common.dto.MapTheme;
 import com.bombit.common.protocol.*;
 import com.bombit.server.app.*;
 import com.bombit.server.game.core.*;
@@ -69,10 +70,14 @@ class LobbyLifecycleTest {
             c.command(PacketType.JOIN_ROOM,Map.of("roomId",id));c.error("ROOM_FULL");
             b.command(PacketType.READY,Map.of("roomId",UUID.randomUUID().toString(),"ready",true));b.error("NOT_IN_ROOM");
             b.command(PacketType.START_GAME);b.error("NOT_HOST");
+            b.command(PacketType.SET_MAP_SELECTION,Map.of("mapSelection","ICE"));b.error("NOT_HOST");
+            a.command(PacketType.SET_MAP_SELECTION,Map.of("mapSelection","FIRE"));
+            var selected=LobbyPacketCodec.decodeRoom(a.until(p->p.getType()==PacketType.ROOM_STATE&&LobbyPacketCodec.decodeRoom(p).mapSelection().name().equals("FIRE")));
+            assertEquals("FIRE",selected.mapSelection().name());
             a.command(PacketType.START_GAME);a.error("NOT_READY");
             b.command(PacketType.READY,Map.of("ready",true));b.command(PacketType.READY,Map.of("ready",true));
             b.until(p->p.getType()==PacketType.ROOM_STATE&&LobbyPacketCodec.decodeRoom(p).players().stream().anyMatch(v->v.playerId().equals(b.id)&&v.state().equals("READY")));
-            a.command(PacketType.START_GAME);var match=DemoPacketCodec.decodeStarted(a.take(PacketType.GAME_STARTED));b.take(PacketType.GAME_STARTED);
+            a.command(PacketType.START_GAME);var match=DemoPacketCodec.decodeStarted(a.take(PacketType.GAME_STARTED));b.take(PacketType.GAME_STARTED);assertEquals(MapTheme.FIRE,match.mapTheme());
             c.command(PacketType.JOIN_ROOM,Map.of("roomId",id));c.error("ROOM_PLAYING");
             b.send(MatchEnvelopeCodec.wrap(match.matchId(),new Packet(PacketType.END_GAME,"{}")));b.error("NOT_HOST");
             a.send(MatchEnvelopeCodec.wrap(UUID.randomUUID(),new Packet(PacketType.END_GAME,"{}")));a.error("STALE_MATCH");
@@ -133,7 +138,7 @@ class LobbyLifecycleTest {
     }
     @Test void realClientControllersReturnToRoomAndReplayOnSameTcpConnections() throws Exception {
         var ui=Executors.newSingleThreadExecutor();var failure=new AtomicReference<Throwable>();var ended=new AtomicInteger();
-        try(var f=new Fixture();var a=new DemoClientConnection(ui,m->{},s->{},failure::set);var b=new DemoClientConnection(ui,m->{},s->{},failure::set)) {
+        try(var f=new Fixture();var a=new GameClientConnection(ui,m->{},s->{},failure::set);var b=new GameClientConnection(ui,m->{},s->{},failure::set)) {
             var room=new AtomicReference<LobbyPacketCodec.RoomView>();
             a.setLobbyListener(p->{if(p.getType()==PacketType.ROOM_STATE) room.set(LobbyPacketCodec.decodeRoom(p));if(p.getType()==PacketType.GAME_OVER)ended.incrementAndGet();});
             b.setLobbyListener(p->{if(p.getType()==PacketType.GAME_OVER)ended.incrementAndGet();});

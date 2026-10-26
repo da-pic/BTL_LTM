@@ -80,7 +80,7 @@ Profile M1 (`run-server.cmd 8888 2`, client `--demo` hoặc `--headless`) vẫn 
 | World/lifecycle | `server/game/core/GameState.java`, `GameLoop.java`; `server/game/bomb/BombGameplayExtension.java` |
 | Snapshot | `server/game/movement/GameStateUpdate.java`, `StateDeltaBuilder.java`, `SnapshotPacketCodec.java` |
 | Bootstrap/handler/event pump | `server/app/LobbyGameServer.java` |
-| Replica/controller/connection | `client/game/movement/ClientWorldState.java`, `MovementClientController.java`; `client/app/DemoClientConnection.java` |
+| Replica/controller/connection | `client/game/movement/ClientWorldState.java`, `MovementClientController.java`; `client/app/GameClientConnection.java` |
 | Scene/renderer/input | `client/game/bomb/BombScene.java`, `BombPresentationState.java`; `client/game/movement/MovementGameWindow.java` |
 
 Renderer TV3 `BombRenderer`/`ExplosionRenderer` được tái sử dụng trực tiếp,

@@ -98,7 +98,7 @@ hay phải chờ 180 giây. Không dùng các test này làm số đo latency LA
 | World/bom/lifecycle | `server/game/core/Player.java`, `GameState.java`, `GameLoop.java`; `server/game/bomb/BombGameplayExtension.java` |
 | Snapshot | `server/game/movement/GameStateUpdate.java`, `StateDeltaBuilder.java`, `SnapshotPacketCodec.java` |
 | Bootstrap/kết thúc | `server/app/LobbyGameServer.java` |
-| Client | `client/game/movement/ClientWorldState.java`, `MovementClientController.java`, `MovementGameWindow.java`; `client/app/DemoClientConnection.java`; `client/lobby/LobbyWindow.java`, `MatchResultsPanel.java` |
+| Client | `client/game/movement/ClientWorldState.java`, `MovementClientController.java`, `MovementGameWindow.java`; `client/app/GameClientConnection.java`; `client/lobby/LobbyWindow.java`, `MatchResultsPanel.java` |
 
 Tái sử dụng ItemSystem, ItemRenderer, BombSystem và renderer TV3; không viết lại
 các module này. RandomItemSpawnPolicy được sửa để từ chối xác suất NaN/vô cực.

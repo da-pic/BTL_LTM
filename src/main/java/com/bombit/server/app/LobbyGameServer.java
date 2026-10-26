@@ -2,11 +2,13 @@ package com.bombit.server.app;
 
 import com.bombit.common.dto.MatchContext;
 import com.bombit.common.dto.MatchResult;
+import com.bombit.common.dto.MapSelection;
+import com.bombit.common.dto.MapTheme;
 import com.bombit.common.protocol.*;
 import com.bombit.server.chat.ChatMessage;
 import com.bombit.server.dispatch.RequestRejectedException;
 import com.bombit.server.game.core.*;
-import com.bombit.server.game.map.DefaultArenaMap;
+import com.bombit.server.game.map.ArenaGenerator;
 import com.bombit.server.game.bomb.*;
 import com.bombit.server.game.movement.*;
 import com.bombit.server.game.runtime.*;
@@ -55,7 +57,7 @@ public final class LobbyGameServer implements AutoCloseable, GameEventSink {
         this(port,rules,MatchRules.demo());
     }
     public LobbyGameServer(int port,BombRules rules,MatchRules matchRules) throws IOException {
-        this(port,new GameRuntimeManager(id->DefaultArenaMap.create(),
+        this(port,new GameRuntimeManager(id->ArenaGenerator.create(),
                 (room,state,players)->new MatchGameplayExtension(state,players,rules,matchRules,
                         new com.bombit.server.game.item.RandomItemSpawnPolicy(matchRules.dropChance(),new Random()),event->{},result->{})));
     }
@@ -64,12 +66,12 @@ public final class LobbyGameServer implements AutoCloseable, GameEventSink {
     }
     public LobbyGameServer(int port,GameRuntimeManager games,PlayerMovementRules movementRules)throws IOException{
         this.movementRules=Objects.requireNonNull(movementRules);
-        movementRules.spawn("validation",1,DefaultArenaMap.SPAWNS.getFirst(),DefaultArenaMap.TILE_SIZE);
+        movementRules.spawn("validation",1,ArenaGenerator.SPAWNS.getFirst(),ArenaGenerator.TILE_SIZE);
         this.games=games; server=new Server(port); rooms=server.getRoomManager();
         server.setGameObserver(this);
         server.setConnectedHandler(session -> { synchronized (this) { send(session, list()); } });
         short[] types={PacketType.LIST_ROOMS,PacketType.CREATE_ROOM,PacketType.JOIN_ROOM,PacketType.LEAVE_ROOM,
-                PacketType.READY,PacketType.START_GAME,PacketType.CHAT,PacketType.END_GAME,
+                PacketType.READY,PacketType.START_GAME,PacketType.SET_MAP_SELECTION,PacketType.CHAT,PacketType.END_GAME,
                 PacketType.MOVE,PacketType.PLANT_BOMB,PacketType.REQUEST_FULL_STATE};
         for (short type:types) server.getRouter().registerHandler(type,this::handle);
     }
@@ -106,6 +108,17 @@ public final class LobbyGameServer implements AutoCloseable, GameEventSink {
                 publishLists();
             }
             case PacketType.START_GAME -> { roomFields(session,packet,Set.of()); startMatch(session); }
+            case PacketType.SET_MAP_SELECTION -> {
+                var b=roomFields(session,packet,Set.of("mapSelection"));
+                Room room=requireRoom(session);
+                if(!room.getHostPlayerId().equals(session.getPlayerId())) throw reject("NOT_HOST");
+                if(room.getState()!=Room.State.WAITING) throw reject("ROOM_PLAYING");
+                MapSelection selection;
+                try { selection=MapSelection.valueOf(LobbyPacketCodec.text(b,"mapSelection",16)); }
+                catch(IllegalArgumentException invalid) { throw reject("INVALID_MAP_SELECTION"); }
+                if(!room.setMapSelection(selection)) throw reject("ROOM_PLAYING");
+                rooms.publishRoomState(room);publishLists();
+            }
             case PacketType.CHAT -> {
                 var b=roomFields(session,packet,Set.of("message")); requireRoom(session);
                 if(!server.getChatHandler().enqueue(new ChatMessage(session.getRoomId(),id,session.getUsername(),
@@ -183,15 +196,16 @@ public final class LobbyGameServer implements AutoCloseable, GameEventSink {
         var roster=room.getPlayersSnapshot(); var spawns=new ArrayList<PlayerSpawn>();
         var identities=new ArrayList<MatchContext.PlayerIdentity>(); var names=new HashMap<String,String>();
         for(int n=0;n<roster.size();n++) {
-            var cell=DefaultArenaMap.SPAWNS.get(n);
-            int size=DefaultArenaMap.TILE_SIZE;
+            var cell=ArenaGenerator.SPAWNS.get(n);
+            int size=ArenaGenerator.TILE_SIZE;
             Session s=roster.get(n); spawns.add(movementRules.spawn(s.getPlayerId(),n+1,cell,size));
             identities.add(new MatchContext.PlayerIdentity(s.getPlayerId(),n+1)); names.put(s.getPlayerId(),s.getUsername());
         }
         GameRuntime game;
         try { game=games.startGame(room.getRoomId(),spawns); }
         catch(RuntimeException error) { games.stopGame(room.getRoomId()); throw reject("MATCH_START_FAILED"); }
-        Match match=new Match(game,new MatchContext(room.getRoomId(),game.matchId(),identities),roster);
+        MapTheme theme=resolveTheme(room.getMapSelection());
+        Match match=new Match(game,new MatchContext(room.getRoomId(),game.matchId(),theme,identities),roster);
         matches.put(room.getRoomId(),match); room.setState(Room.State.PLAYING);
         roster.forEach(s -> s.setState(SessionState.PLAYING));
         Packet started=DemoPacketCodec.started(match.context,names);
@@ -199,6 +213,13 @@ public final class LobbyGameServer implements AutoCloseable, GameEventSink {
         if(!match.active) return; // A failed writer may synchronously remove the roster.
         Thread worker=new Thread(() -> pump(match),"Lobby-Snapshot-"+game.matchId());
         workers.add(worker); worker.start(); rooms.publishRoomState(room); publishLists();
+    }
+    private static MapTheme resolveTheme(MapSelection selection) {
+        if(selection==MapSelection.RANDOM) {
+            MapTheme[] themes=MapTheme.values();
+            return themes[ThreadLocalRandom.current().nextInt(themes.length)];
+        }
+        return MapTheme.valueOf(selection.name());
     }
     private void pump(Match match) {
         try {
