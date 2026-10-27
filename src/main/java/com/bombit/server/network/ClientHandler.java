@@ -13,11 +13,11 @@ import java.util.concurrent.TimeUnit;
 /** Decode complete frames, gate handshake, then route using the server-owned session ID. */
 public final class ClientHandler implements Runnable {
     private final Socket socket;
-    private final Session session;
+    private volatile Session session;
     private final SessionManager sessions;
     private final ConnectionManager connections;
     private final MessageRouter router;
-    private final SessionWriter writer;
+    private volatile SessionWriter writer;
     private final int frameTimeoutMillis;
     private final InboundRateLimiter limits=new InboundRateLimiter();
     private final java.util.function.Consumer<Throwable> failures;
@@ -46,11 +46,38 @@ public final class ClientHandler implements Runnable {
                     continue;
                 }
                 boolean pending = session.getState() == SessionState.CONNECTED;
-                if (pending && packet.getType() != PacketType.CONNECT) {
+                if (pending && packet.getType() != PacketType.CONNECT && packet.getType() != PacketType.RECONNECT) {
                     error("NOT_CONNECTED"); hardDrop=true; drain=true; break;
                 }
-                if (!pending && packet.getType() == PacketType.CONNECT) {
+                if (!pending && (packet.getType() == PacketType.CONNECT || packet.getType() == PacketType.RECONNECT)) {
                     error("INVALID_PACKET"); continue;
+                }
+                if (pending && packet.getType() == PacketType.RECONNECT) {
+                    SessionPacketCodec.Reconnect req;
+                    try {
+                        req = SessionPacketCodec.reconnect(packet);
+                    } catch (RuntimeException invalid) {
+                        error("INVALID_PACKET"); hardDrop=true; drain=true; break;
+                    }
+                    if (!sessions.canReconnect(req.playerId(), req.reconnectToken())) {
+                        error("RECONNECT_REJECTED"); hardDrop=true; drain=true; break;
+                    }
+                    String provisionalId = session.getPlayerId();
+                    connections.releasePreservingSocket(provisionalId);
+                    sessions.discardProvisional(provisionalId);
+                    var newWriter = new java.util.concurrent.atomic.AtomicReference<SessionWriter>();
+                    boolean ok = sessions.reconnect(req.playerId(), req.reconnectToken(), socket, resumed -> {
+                        var w = connections.open(resumed);
+                        newWriter.set(w);
+                        w.send(resumed, OutboundMessage.fromPacket(
+                                SessionPacketCodec.acknowledgement(resumed.getPlayerId(), resumed.getReconnectToken())));
+                    });
+                    if (!ok || newWriter.get() == null) {
+                        error("RECONNECT_REJECTED"); hardDrop=true; drain=true; break;
+                    }
+                    this.session = sessions.find(req.playerId()).orElseThrow();
+                    this.writer = newWriter.get();
+                    continue;
                 }
                 try {
                     if (!router.route(session.getPlayerId(), packet)) { error("UNKNOWN_MESSAGE"); continue; }

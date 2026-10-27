@@ -9,6 +9,7 @@ public final class ServerApplication {
         int port = args.length > 0 ? Integer.parseInt(args[0]) : 8888;
         if (args.length < 2 || args[1].equals("--lobby")) {
             try(var lobby=new LobbyGameServer(port)) {
+                lobby.setSeamlessRecovery(true);
                 Thread hook=new Thread(lobby::close,"Lobby-Server-Shutdown");
                 Runtime.getRuntime().addShutdownHook(hook);
                 try { System.out.println("Lobby server: port="+lobby.port()); lobby.start(); }

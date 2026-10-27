@@ -17,6 +17,7 @@ import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
+import java.util.function.Consumer;
 
 public final class SessionManager implements AutoCloseable {
     private final Map<String, Session> sessions = new ConcurrentHashMap<>();
@@ -62,7 +63,7 @@ public final class SessionManager implements AutoCloseable {
         notifySafely(()->gameEventSink.onPlayerDisconnected(session));
         ScheduledFuture<?> timer;
         try {
-            timer = scheduler.schedule(() -> hardDrop(playerId), reconnectGraceSeconds, TimeUnit.SECONDS);
+            timer = scheduler.schedule(() -> expire(playerId, session), reconnectGraceSeconds, TimeUnit.SECONDS);
         } catch (RejectedExecutionException shuttingDown) {
             hardDrop(playerId);
             return;
@@ -86,15 +87,30 @@ public final class SessionManager implements AutoCloseable {
     }
 
     public boolean reconnect(String playerId, String token, Socket newSocket) {
-        if (closed.get()) { closeQuietly(newSocket); return false; }
+        return reconnect(playerId, token, newSocket, resumed -> { });
+    }
+
+    /** True when a RECONNECT frame would be accepted; used before detaching the provisional connection. */
+    public boolean canReconnect(String playerId, String token) {
+        Session session = playerId == null ? null : sessions.get(playerId);
+        if (closed.get() || session == null || token == null || !token.equals(session.getReconnectToken())) return false;
+        SessionState state = session.getState();
+        return state != SessionState.CONNECTED && state != SessionState.CLOSED;
+    }
+
+    /**
+     * Seamless Session Recovery: attach a new socket to the soft-dropped session.
+     * A valid token also takes over a connection the server still believes is alive
+     * (half-open TCP after Wi-Fi loss is detected by the client before the server).
+     * {@code beforeResume} runs before game observers so the new writer exists when they send.
+     */
+    public boolean reconnect(String playerId, String token, Socket newSocket, Consumer<Session> beforeResume) {
+        if (!canReconnect(playerId, token)) { closeQuietly(newSocket); return false; }
         Session session = sessions.get(playerId);
-        if (session == null || token == null || !token.equals(session.getReconnectToken())
-                || session.getState() != SessionState.DISCONNECTED) {
-            closeQuietly(newSocket);
-            return false;
-        }
+        if (session == null) { closeQuietly(newSocket); return false; }
+        if (session.getState() != SessionState.DISCONNECTED) handleUnexpectedDisconnect(playerId);
         synchronized (session) {
-            if (session.getState() != SessionState.DISCONNECTED) {
+            if (session.getState() != SessionState.DISCONNECTED || sessions.get(playerId) != session) {
                 closeQuietly(newSocket);
                 return false;
             }
@@ -102,19 +118,48 @@ public final class SessionManager implements AutoCloseable {
             session.attachSocket(newSocket);
             session.restoreStateAfterReconnect(SessionState.PLAYING);
         }
+        try { beforeResume.accept(session); }
+        catch (RuntimeException failed) { failure.compareAndSet(null, failed); hardDrop(playerId); return false; }
         notifySafely(()->gameEventSink.onPlayerReconnected(session));
         return true;
     }
 
+    /**
+     * Removes a provisional (pre-handshake) entry without callbacks and without closing its socket,
+     * because that socket is being handed to the session named in a RECONNECT frame.
+     */
+    public boolean discardProvisional(String provisionalId) {
+        Session session = sessions.get(provisionalId);
+        if (session == null) return false;
+        synchronized (session) {
+            if (session.getState() != SessionState.CONNECTED || !sessions.remove(provisionalId, session)) return false;
+            session.detachSocket();
+            session.setState(SessionState.CLOSED);
+        }
+        return true;
+    }
+
     public void hardDrop(String playerId) {
-        Session session = sessions.remove(playerId);
-        cancelDisconnectTimer(playerId);
+        Session session = sessions.get(playerId);
         if (session == null) {
+            cancelDisconnectTimer(playerId);
             return;
         }
-        session.setState(SessionState.CLOSED);
-        session.closeSocket();
+        synchronized (session) {
+            if (!sessions.remove(playerId, session)) return;
+            cancelDisconnectTimer(playerId);
+            session.setState(SessionState.CLOSED);
+            session.closeSocket();
+        }
         notifySafely(()->gameEventSink.onPlayerHardDropped(session));
+    }
+
+    /** Grace timer: a late timer must never drop a session that already resumed on a new socket. */
+    private void expire(String playerId, Session expected) {
+        synchronized (expected) {
+            if (sessions.get(playerId) != expected || expected.getState() != SessionState.DISCONNECTED) return;
+        }
+        hardDrop(playerId);
     }
 
     public void broadcastToRoom(String roomId, OutboundMessage message) {

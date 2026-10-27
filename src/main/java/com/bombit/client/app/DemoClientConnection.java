@@ -22,11 +22,15 @@ public final class DemoClientConnection implements AutoCloseable {
     private final Semaphore uiSlots = new Semaphore(256);
     private final Semaphore controlSlots=new Semaphore(128);
     private final java.util.concurrent.atomic.AtomicLong uiBytes=new java.util.concurrent.atomic.AtomicLong();
-    private final AtomicBoolean closed = new AtomicBoolean(), resyncQueued = new AtomicBoolean();
+    private final AtomicBoolean closed = new AtomicBoolean(), resyncQueued = new AtomicBoolean(), reconnecting = new AtomicBoolean();
+    private volatile boolean autoReconnect = false;
     private volatile long receivedNanos = System.nanoTime();
     private volatile long lastResync;
     private int pingId;
     private String sessionId;
+    private volatile String reconnectToken;
+    private volatile String host;
+    private volatile int port;
     private volatile MatchContext context;
     private Consumer<Packet> lobby;
     private volatile MovementClientController movement;
@@ -41,29 +45,60 @@ public final class DemoClientConnection implements AutoCloseable {
             receivedNanos = System.nanoTime();
             dispatch(() -> packet(packet),6+packet.getJsonPayload().getBytes(java.nio.charset.StandardCharsets.UTF_8).length);
         });
-        network.setOnDisconnect(error -> fail(error == null ? new IOException("Server disconnected") : error));
+        network.setOnDisconnect(error -> {
+            if (autoReconnect && context != null && !closed.get() && sessionId != null && reconnectToken != null) {
+                tryReconnect(error);
+            } else {
+                fail(error == null ? new IOException("Server disconnected") : error);
+            }
+        });
     }
     /** Lobby events and command errors remain recoverable on the UI executor. */
     public void setLobbyListener(Consumer<Packet> listener) { lobby=listener; }
     public String sessionId() { return sessionId; }
+    public String reconnectToken() { return reconnectToken; }
+    public boolean isReconnecting() { return reconnecting.get(); }
+    public void setAutoReconnect(boolean enabled) { this.autoReconnect = enabled; }
+    public boolean isAutoReconnect() { return autoReconnect; }
     public void send(Packet packet) {
         if(closed.get())return;
         if(!controlSlots.tryAcquire()){fail(new IOException("Client control queue full"));return;}
-        try { control.execute(() -> { try { if(!closed.get()) network.send(packet); } catch(Exception e) { fail(e); } finally{controlSlots.release();} }); }
+        try { control.execute(() -> {
+            try {
+                if(!closed.get()) {
+                    if (reconnecting.get()) return;
+                    network.send(packet);
+                }
+            } catch(Exception e) {
+                if (autoReconnect && context != null && !closed.get() && sessionId != null && reconnectToken != null) {
+                    tryReconnect(e);
+                } else {
+                    fail(e);
+                }
+            } finally{controlSlots.release();}
+        }); }
         catch(RejectedExecutionException stopping) {controlSlots.release();}
     }
     public void connect(String host, int port, String name) throws IOException {
+        this.host = host;
+        this.port = port;
         try {
             Packet connect = SessionPacketCodec.connectRequest(name);
             SessionPacketCodec.connect(connect);
             network.connect(host, port);
             network.send(connect);
             control.scheduleAtFixedRate(() -> {
-                if (closed.get()) return;
+                if (closed.get() || reconnecting.get()) return;
                 try {
                     if (System.nanoTime() - receivedNanos > TimeUnit.SECONDS.toNanos(10)) throw new IOException("Server heartbeat timeout");
                     network.send(new Packet(PacketType.PING, "{\"pingId\":" + ++pingId + "}"));
-                } catch (Exception error) { fail(error); }
+                } catch (Exception error) {
+                    if (autoReconnect && context != null && !closed.get() && sessionId != null && reconnectToken != null) {
+                        tryReconnect(error);
+                    } else {
+                        fail(error);
+                    }
+                }
             }, 2, 2, TimeUnit.SECONDS);
         } catch (IOException | RuntimeException error) { fail(error); throw error; }
     }
@@ -85,8 +120,15 @@ public final class DemoClientConnection implements AutoCloseable {
     private void packet(Packet packet) {
         switch (packet.getType()) {
             case PacketType.CONNECT_ACK -> {
-                sessionId = SessionPacketCodec.decodeAcknowledgement(packet).playerId();
-                status.accept("Connected. Waiting for the other players...");
+                var ack = SessionPacketCodec.decodeAcknowledgement(packet);
+                sessionId = ack.playerId();
+                reconnectToken = ack.reconnectToken();
+                if (reconnecting.getAndSet(false)) {
+                    status.accept("Reconnected! Resuming match...");
+                    dispatch(this::requestFullState);
+                } else {
+                    status.accept("Connected. Waiting for the other players...");
+                }
             }
             case PacketType.ROOM_STATE, PacketType.LIST_ROOMS, PacketType.LEAVE_ROOM, PacketType.CHAT -> {
                 if(lobby!=null) lobby.accept(packet); else status.accept("Waiting for all demo players to connect...");
@@ -102,13 +144,21 @@ public final class DemoClientConnection implements AutoCloseable {
             case PacketType.GAME_STARTED -> {
                 if (sessionId == null) throw new IllegalStateException("Game started before handshake");
                 MatchContext next = DemoPacketCodec.decodeStarted(packet);
-                if (context != null && context.matchId().equals(next.matchId())) return;
+                if (context != null && context.matchId().equals(next.matchId())) {
+                    if (movement == null || movement.isClosed()) {
+                        int localId = context.playerId(sessionId).orElseThrow();
+                        movement = new MovementClientController(network, localId, ui, () -> dispatch(this::requestFullState),
+                                error->{if(context!=null&&context.matchId().equals(next.matchId())&&!reconnecting.get())fail(error);}, context.matchId(), false);
+                        started.accept(movement);
+                    }
+                    return;
+                }
                 if (movement != null) movement.close();
                 context = next;
                 lastResult=null;
                 int localId = context.playerId(sessionId).orElseThrow();
                 movement = new MovementClientController(network, localId, ui, () -> dispatch(this::requestFullState),
-                        error->{if(context!=null&&context.matchId().equals(next.matchId()))fail(error);}, context.matchId(), false);
+                        error->{if(context!=null&&context.matchId().equals(next.matchId())&&!reconnecting.get())fail(error);}, context.matchId(), false);
                 started.accept(movement);
             }
             case PacketType.GAME_SNAPSHOT, PacketType.FULL_STATE_SYNC, PacketType.BOMB_PLANTED, PacketType.BOMB_EXPLODE,
@@ -144,13 +194,50 @@ public final class DemoClientConnection implements AutoCloseable {
                         var request = new ResyncPacketCodec.Request(tick, ResyncPacketCodec.Reason.BASELINE_MISMATCH);
                         network.send(MatchEnvelopeCodec.wrap(match, ResyncPacketCodec.encode(request)));
                     }
-                } catch (Exception error) { fail(error); }
+                } catch (Exception error) {
+                    if (autoReconnect && context != null && !closed.get() && sessionId != null && reconnectToken != null) {
+                        tryReconnect(error);
+                    } else {
+                        fail(error);
+                    }
+                }
                 finally { resyncQueued.set(false); }
             }, delay, TimeUnit.NANOSECONDS);
         } catch (RejectedExecutionException stopping) { resyncQueued.set(false); }
     }
+    private void tryReconnect(Throwable error) {
+        if (closed.get() || reconnecting.getAndSet(true)) return;
+        control.execute(() -> {
+            status.accept("Connection lost. Reconnecting to match...");
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(14);
+            int attempt = 0;
+            while (!closed.get() && context != null && System.nanoTime() < deadline) {
+                attempt++;
+                try {
+                    while (network.isReaderAlive() && System.nanoTime() < deadline) {
+                        Thread.sleep(30);
+                    }
+                    if (closed.get() || context == null) break;
+                    network.connect(host, port);
+                    receivedNanos = System.nanoTime();
+                    network.send(SessionPacketCodec.reconnectRequest(sessionId, reconnectToken));
+                    return;
+                } catch (Exception e) {
+                    try {
+                        Thread.sleep(Math.min(500, 50 * attempt));
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    }
+                }
+            }
+            reconnecting.set(false);
+            fail(error == null ? new IOException("Failed to reconnect to match") : error);
+        });
+    }
     private void fail(Throwable error) {
         if (!closed.compareAndSet(false, true)) return;
+        reconnecting.set(false);
         network.close(); control.shutdownNow();
         if(movement!=null)movement.close();
         try{ui.execute(() -> {context=null;lobby=null;errors.accept(error);});}catch(RejectedExecutionException stopping){}
@@ -160,6 +247,7 @@ public final class DemoClientConnection implements AutoCloseable {
     public int localId() { return context.playerId(sessionId).orElseThrow(); }
     @Override public void close() {
         if (!closed.compareAndSet(false, true)) return;
+        reconnecting.set(false);
         network.close(); control.shutdownNow();
         if(movement!=null)movement.close();
         try{ui.execute(() -> {movement=null;context=null;lobby=null;});}catch(RejectedExecutionException stopping){}

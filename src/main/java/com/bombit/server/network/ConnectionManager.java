@@ -60,6 +60,13 @@ public final class ConnectionManager implements AutoCloseable {
         }
     }
 
+    public void releasePreservingSocket(String playerId) {
+        SessionWriter writer = writers.remove(playerId);
+        if (writer != null) {
+            writer.close(false);
+        }
+    }
+
     public void release(String playerId, Socket socket) {
         SessionWriter writer = writers.get(playerId);
         if (writer != null && writer.owns(socket) && writers.remove(playerId, writer)) writer.close();
