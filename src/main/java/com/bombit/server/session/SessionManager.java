@@ -22,6 +22,7 @@ import java.util.function.Consumer;
 public final class SessionManager implements AutoCloseable {
     private final Map<String, Session> sessions = new ConcurrentHashMap<>();
     private final Map<String, ScheduledFuture<?>> disconnectTimers = new ConcurrentHashMap<>();
+    private final Map<String, Object> disconnectEpochs = new ConcurrentHashMap<>();
     private final ScheduledThreadPoolExecutor scheduler = new ScheduledThreadPoolExecutor(2,r->new Thread(r,"session-expiry"));
     private final AtomicReference<Throwable> failure=new AtomicReference<>();
     private final GameEventSink gameEventSink;
@@ -54,16 +55,29 @@ public final class SessionManager implements AutoCloseable {
     }
 
     public void handleUnexpectedDisconnect(String playerId) {
+        disconnect(playerId, null, false);
+    }
+
+    /** Ignore a reader/writer failure from a connection that has already been replaced. */
+    public void handleUnexpectedDisconnect(String playerId, Socket expectedSocket) {
+        disconnect(playerId, expectedSocket, true);
+    }
+
+    private void disconnect(String playerId, Socket expectedSocket, boolean checkSocket) {
         if (closed.get()) { hardDrop(playerId); return; }
         Session session = sessions.get(playerId);
-        if (session == null || !markDisconnected(session)) {
-            return;
+        Object epoch = new Object();
+        if (session == null) return;
+        synchronized (session) {
+            if (checkSocket && session.getSocket() != expectedSocket) return;
+            if (!markDisconnected(session)) return;
+            disconnectEpochs.put(playerId, epoch);
+            session.closeSocket();
         }
-        session.closeSocket();
         notifySafely(()->gameEventSink.onPlayerDisconnected(session));
         ScheduledFuture<?> timer;
         try {
-            timer = scheduler.schedule(() -> expire(playerId, session), reconnectGraceSeconds, TimeUnit.SECONDS);
+            timer = scheduler.schedule(() -> expire(playerId, session, epoch), reconnectGraceSeconds, TimeUnit.SECONDS);
         } catch (RejectedExecutionException shuttingDown) {
             hardDrop(playerId);
             return;
@@ -155,11 +169,16 @@ public final class SessionManager implements AutoCloseable {
     }
 
     /** Grace timer: a late timer must never drop a session that already resumed on a new socket. */
-    private void expire(String playerId, Session expected) {
+    private void expire(String playerId, Session expected, Object epoch) {
         synchronized (expected) {
-            if (sessions.get(playerId) != expected || expected.getState() != SessionState.DISCONNECTED) return;
+            if (sessions.get(playerId) != expected || expected.getState() != SessionState.DISCONNECTED
+                    || disconnectEpochs.get(playerId) != epoch) return;
+            if (!sessions.remove(playerId, expected)) return;
+            cancelDisconnectTimer(playerId);
+            expected.setState(SessionState.CLOSED);
+            expected.closeSocket();
         }
-        hardDrop(playerId);
+        notifySafely(() -> gameEventSink.onPlayerHardDropped(expected));
     }
 
     public void broadcastToRoom(String roomId, OutboundMessage message) {
@@ -199,6 +218,7 @@ public final class SessionManager implements AutoCloseable {
     }
 
     private void cancelDisconnectTimer(String playerId) {
+        disconnectEpochs.remove(playerId);
         ScheduledFuture<?> timer = disconnectTimers.remove(playerId);
         if (timer != null) {
             timer.cancel(false);

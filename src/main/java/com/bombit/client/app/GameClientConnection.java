@@ -23,7 +23,7 @@ public final class GameClientConnection implements AutoCloseable {
     private final Semaphore controlSlots=new Semaphore(128);
     private final java.util.concurrent.atomic.AtomicLong uiBytes=new java.util.concurrent.atomic.AtomicLong();
     private final AtomicBoolean closed = new AtomicBoolean(), resyncQueued = new AtomicBoolean(), reconnecting = new AtomicBoolean();
-    private volatile boolean autoReconnect = false;
+    private volatile boolean autoReconnect = true;
     private volatile long receivedNanos = System.nanoTime();
     private volatile long lastResync;
     private int pingId;
@@ -149,7 +149,7 @@ public final class GameClientConnection implements AutoCloseable {
                     if (movement == null || movement.isClosed()) {
                         int localId = context.playerId(sessionId).orElseThrow();
                         movement = new MovementClientController(network, localId, ui, () -> dispatch(this::requestFullState),
-                                error->{if(context!=null&&context.matchId().equals(next.matchId())&&!reconnecting.get())fail(error);}, context.matchId(), false);
+                                this::movementFailed, context.matchId(), false);
                         started.accept(movement);
                     }
                     return;
@@ -160,7 +160,7 @@ public final class GameClientConnection implements AutoCloseable {
                 int localId = context.playerId(sessionId).orElseThrow();
                 matchLocalId = localId;
                 movement = new MovementClientController(network, localId, ui, () -> dispatch(this::requestFullState),
-                        error->{if(context!=null&&context.matchId().equals(next.matchId())&&!reconnecting.get())fail(error);}, context.matchId(), false);
+                        this::movementFailed, context.matchId(), false);
                 started.accept(movement);
             }
             case PacketType.GAME_SNAPSHOT, PacketType.FULL_STATE_SYNC, PacketType.BOMB_PLANTED, PacketType.BOMB_EXPLODE,
@@ -207,15 +207,21 @@ public final class GameClientConnection implements AutoCloseable {
             }, delay, TimeUnit.NANOSECONDS);
         } catch (RejectedExecutionException stopping) { resyncQueued.set(false); }
     }
+    private void movementFailed(Throwable error) {
+        if (autoReconnect && context != null && !closed.get()) tryReconnect(error);
+        else fail(error);
+    }
     private void tryReconnect(Throwable error) {
         if (closed.get() || reconnecting.getAndSet(true)) return;
+        if (movement != null) movement.suspendForReconnect();
         control.execute(() -> {
-            status.accept("Connection lost. Reconnecting to match...");
-            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(14);
+            dispatch(() -> status.accept("Connection lost. Reconnecting (30 seconds)..."));
+            long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(IntegrationContract.RECONNECT_GRACE_MILLIS);
             int attempt = 0;
             while (!closed.get() && context != null && System.nanoTime() < deadline) {
                 attempt++;
                 try {
+                    network.disconnect();
                     while (network.isReaderAlive() && System.nanoTime() < deadline) {
                         Thread.sleep(30);
                     }
@@ -223,7 +229,12 @@ public final class GameClientConnection implements AutoCloseable {
                     network.connect(host, port);
                     receivedNanos = System.nanoTime();
                     network.send(SessionPacketCodec.reconnectRequest(sessionId, reconnectToken));
-                    return;
+                    long ackDeadline = Math.min(deadline, System.nanoTime() + TimeUnit.SECONDS.toNanos(3));
+                    while (!closed.get() && reconnecting.get() && network.isConnected() && System.nanoTime() < ackDeadline) {
+                        Thread.sleep(30);
+                    }
+                    if (closed.get() || !reconnecting.get()) return;
+                    throw new IOException("Reconnect handshake timed out");
                 } catch (Exception e) {
                     try {
                         Thread.sleep(Math.min(500, 50 * attempt));

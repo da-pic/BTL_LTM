@@ -29,6 +29,7 @@ public final class LobbyGameServer implements AutoCloseable, GameEventSink {
     private final PlayerMovementRules movementRules;
     private final Map<String, Match> matches = new HashMap<>();
     private final Set<Thread> workers = ConcurrentHashMap.newKeySet();
+    private final Map<String, Packet> completedResults = new HashMap<>();
     private final AtomicReference<Throwable> failure = new AtomicReference<>();
     private boolean closed;
 
@@ -66,7 +67,7 @@ public final class LobbyGameServer implements AutoCloseable, GameEventSink {
     }
     public LobbyGameServer(int port,GameRuntimeManager games,PlayerMovementRules movementRules)throws IOException{
         this.movementRules=Objects.requireNonNull(movementRules);
-        movementRules.spawn("validation",1,ArenaGenerator.SPAWNS.getFirst(),ArenaGenerator.TILE_SIZE);
+        movementRules.spawn("validation",1,ArenaGenerator.SPAWNS.get(0),ArenaGenerator.TILE_SIZE);
         this.games=games; server=new Server(port); rooms=server.getRoomManager();
         server.setGameObserver(this);
         server.setConnectedHandler(session -> { synchronized (this) { send(session, list()); } });
@@ -264,7 +265,10 @@ public final class LobbyGameServer implements AutoCloseable, GameEventSink {
             if(outcome==null&&latest!=null&&latest.getMatchFrame()!=null)outcome=latest.getMatchFrame().result();
             if(outcome==null)outcome=new MatchResult(latest==null?0:latest.getTick(),null,MatchResult.Reason.ABORTED,List.of());
             Packet ended=MatchEnvelopeCodec.wrap(match.context.matchId(),GameplayPacketCodec.result(outcome));
-            match.roster.forEach(s -> send(s,ended));
+            match.roster.forEach(s -> {
+                if (s.getState()==SessionState.DISCONNECTED) completedResults.put(s.getPlayerId(),ended);
+                send(s,ended);
+            });
         } catch(IOException e) { throw new IllegalStateException(e); }
         rooms.publishRoomState(room);
     }
@@ -287,7 +291,7 @@ public final class LobbyGameServer implements AutoCloseable, GameEventSink {
         catch(IllegalStateException unavailable) { return false; }
     }
     private static RequestRejectedException reject(String code) { return new RequestRejectedException(code); }
-    private volatile boolean seamlessRecovery = false;
+    private volatile boolean seamlessRecovery = true;
     public void setSeamlessRecovery(boolean enabled) { this.seamlessRecovery = enabled; }
     public boolean isSeamlessRecovery() { return seamlessRecovery; }
 
@@ -304,6 +308,7 @@ public final class LobbyGameServer implements AutoCloseable, GameEventSink {
         leave(s);
     }
     @Override public synchronized void onPlayerHardDropped(Session s) {
+        completedResults.remove(s.getPlayerId());
         String roomId = s.getRoomId();
         Match match = roomId == null ? null : matches.get(roomId);
         if (match != null && match.active) {
@@ -312,11 +317,24 @@ public final class LobbyGameServer implements AutoCloseable, GameEventSink {
                 match.game.submit(new PlayerDisconnectedCommand(playerNum, true));
             }
         }
-        leave(s);
+        if (seamlessRecovery) {
+            rooms.leaveRoom(s);
+            if (roomId != null && rooms.find(roomId) == null && match != null) {
+                match.active = false;
+                matches.remove(roomId);
+                games.stopGame(roomId);
+            }
+            publishLists();
+        } else leave(s);
     }
     @Override public synchronized void onPlayerReconnected(Session s) {
         String roomId = s.getRoomId();
         Match match = roomId == null ? null : matches.get(roomId);
+        Packet completed = completedResults.remove(s.getPlayerId());
+        if (completed != null) {
+            s.setState(roomId == null ? SessionState.IN_LOBBY : SessionState.IN_ROOM);
+            send(s,completed);
+        }
         if (match != null && match.active) {
             int playerNum = match.context.playerId(s.getPlayerId()).orElse(-1);
             if (playerNum > 0) {
@@ -329,9 +347,12 @@ public final class LobbyGameServer implements AutoCloseable, GameEventSink {
             send(s, started);
             var latest = match.game.createUpdate();
             match.barrier = latest == null ? -1L : latest.getTick();
+            match.initialized.remove(s.getPlayerId());
             match.game.requestFullState();
-            match.initialized.add(s.getPlayerId());
         }
+        Room room = roomId == null ? null : rooms.find(roomId);
+        if (room != null) rooms.publishRoomState(room);
+        send(s,list());
     }
     public void start() throws IOException { server.start(); }
     public int port() { return server.getPort(); }

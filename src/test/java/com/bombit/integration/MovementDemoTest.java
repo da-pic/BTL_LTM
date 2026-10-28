@@ -35,6 +35,7 @@ class MovementDemoTest {
         try(var fixture=new Fixture(2);
             var a=new GameClientConnection(ui,movement->{},status->{},error->errors.incrementAndGet());
             var b=new GameClientConnection(ui,movement->{},status->{},error->errors.incrementAndGet())) {
+            a.setAutoReconnect(false);b.setAutoReconnect(false); // M1 has no resume admission.
             a.connect("127.0.0.1",fixture.server.port(),"A");b.connect("127.0.0.1",fixture.server.port(),"B");
             awaitActor(ui,()->a.movement()!=null&&b.movement()!=null&&a.movement().isInputReady()&&b.movement().isInputReady());
             fixture.close();

@@ -12,6 +12,22 @@ import java.util.concurrent.TimeUnit;
 import static org.junit.jupiter.api.Assertions.*;
 
 class SessionManagerTest {
+    @Test void graceExpiryRemovesDisconnectedSessionAndRejectsResume() throws Exception {
+        var expired = new CountDownLatch(1);
+        var sink = new GameEventSink() {
+            public void onPlayerDisconnected(Session s) { }
+            public void onPlayerReconnected(Session s) { }
+            public void onPlayerHardDropped(Session s) { expired.countDown(); }
+        };
+        try(var manager=new SessionManager(sink,1)) {
+            var session=new Session("expiry",new Socket());
+            session.setState(SessionState.PLAYING);manager.register(session);
+            manager.handleUnexpectedDisconnect(session.getPlayerId());
+            assertTrue(expired.await(3,TimeUnit.SECONDS));
+            assertTrue(manager.find(session.getPlayerId()).isEmpty());
+            assertFalse(manager.reconnect(session.getPlayerId(),session.getReconnectToken(),new Socket()));
+        }
+    }
     @Test
     void disconnectRacingShutdownDoesNotScheduleAfterExecutorClose() throws Exception {
         var entered = new CountDownLatch(1);

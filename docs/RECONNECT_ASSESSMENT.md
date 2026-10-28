@@ -1,4 +1,23 @@
-# Đánh giá reconnect — ngoài phạm vi nhiệm vụ 9
+# Khôi phục kết nối và đánh giá lịch sử
+
+## Trạng thái hiện tại — 28/10/2026
+
+Lobby bật `seamlessRecovery` và client bật `autoReconnect` mặc định.
+Server giữ chỗ 30 giây sau khi phát hiện mất kết nối; nhân vật dừng di chuyển,
+vẫn chịu sát thương, bom và đồng hồ trận tiếp tục chạy. Hết hạn chỉ loại người đó;
+trận có thể kết thúc bình thường khi chỉ còn một người sống.
+
+Client còn mở sẽ tự thử TCP/RECONNECT bằng playerId và token trong bộ nhớ.
+Input tạm khóa đến khi nhận full state; giữ bộ đếm MOVE và PLANT_BOMB khi khôi phục,
+bỏ prediction chưa xác nhận. Server thay writer/socket, bỏ callback từ socket cũ,
+và kiểm tra generation của timer hết hạn. Nếu trận kết thúc trong thời gian chờ,
+client nhận GAME_OVER và quay về phòng thay vì mở lại trận.
+
+Đóng ứng dụng/End task không thể tự khởi động lại client; token không được lưu ra đĩa.
+Chủ động Leave room vẫn hủy lượt. Profile M1 `--demo` không hỗ trợ resume.
+Hướng dẫn demo LAN/loopback: [DEMO_SCRIPT.md](DEMO_SCRIPT.md).
+
+## Đánh giá lịch sử trước khi triển khai
 
 Ngày rà soát: 22/10/2026. **Chưa triển khai reconnect trong ứng dụng.**
 Server transport/lobby không đăng ký PacketType.RECONNECT; test nhiệm vụ 9 xác

@@ -67,6 +67,7 @@ public final class ClientHandler implements Runnable {
                     sessions.discardProvisional(provisionalId);
                     var newWriter = new java.util.concurrent.atomic.AtomicReference<SessionWriter>();
                     boolean ok = sessions.reconnect(req.playerId(), req.reconnectToken(), socket, resumed -> {
+                        connections.release(resumed.getPlayerId());
                         var w = connections.open(resumed);
                         newWriter.set(w);
                         w.send(resumed, OutboundMessage.fromPacket(
@@ -102,7 +103,7 @@ public final class ClientHandler implements Runnable {
             if (drain) writer.finishAndAwait();
             if (session.getSocket() == socket) {
                 if (hardDrop || session.getState() == SessionState.CONNECTED) sessions.hardDrop(session.getPlayerId());
-                else sessions.handleUnexpectedDisconnect(session.getPlayerId());
+                else sessions.handleUnexpectedDisconnect(session.getPlayerId(), socket);
             }
             connections.release(session.getPlayerId(), socket);
             try { socket.close(); } catch (IOException ignored) { }

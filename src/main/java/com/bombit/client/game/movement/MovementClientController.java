@@ -25,6 +25,8 @@ public final class MovementClientController implements AutoCloseable {
     private PredictionController prediction;
     private ReconciliationController reconciliation;
     private volatile boolean closed;
+    private volatile boolean suspended;
+    public void suspendForReconnect() { suspended = true; sender.getQueue().clear(); }
     private final java.util.concurrent.atomic.AtomicBoolean stopping=new java.util.concurrent.atomic.AtomicBoolean();
     private final Semaphore uiSlots=new Semaphore(256);
     private final java.util.concurrent.atomic.AtomicLong uiBytes=new java.util.concurrent.atomic.AtomicLong();
@@ -80,6 +82,7 @@ public final class MovementClientController implements AutoCloseable {
     }
     private void apply(GameStateUpdate update) {
         try {
+            if (suspended && !update.isFullState()) return;
             var result=world.apply(update);
             if(result == ClientWorldState.Result.NEED_FULL_STATE) {
                 if(!resyncPending) { resyncPending=true; sender.execute(resync); } return;
@@ -99,14 +102,17 @@ public final class MovementClientController implements AutoCloseable {
                 var stats=frame.players().stream().filter(p->p.playerId()==localId).findFirst().orElseThrow();
                 if(stats.respawns()!=respawns){prediction.respawn();respawns=stats.respawns();}
             }
+            if (suspended) prediction.respawn();
             reconciliation.reconcile(world,player); interpolation.record(world);
+            suspended=false;
         } catch (RuntimeException e) { fail(e); }
     }
     /** The UI input controller calls this after prediction; enqueue without blocking the EDT. */
     public void send(MovePacketCodec.Input input) {
+        if(suspended) return;
         if(closed) throw new IllegalStateException("Movement client closed");
         enqueue(() -> {
-            try { if(!closed) {
+            try { if(!closed && !suspended) {
                 Packet packet=MovePacketCodec.encode(input);
                 network.send(matchId==null?packet:MatchEnvelopeCodec.wrap(matchId,packet));
             } }
@@ -120,7 +126,7 @@ public final class MovementClientController implements AutoCloseable {
         if(!isInputReady()||!bombs.enabled()||local==null||!local.isAlive()||matchId==null) return;
         Packet command=BombPacketCodec.plant(++plantRequest);
         enqueue(()->{
-            try { if(!closed) network.send(MatchEnvelopeCodec.wrap(matchId,command)); }
+            try { if(!closed && !suspended) network.send(MatchEnvelopeCodec.wrap(matchId,command)); }
             catch(Exception e) { fail(e); }
         });
     }
@@ -128,6 +134,11 @@ public final class MovementClientController implements AutoCloseable {
         try{sender.execute(task);}catch(RejectedExecutionException full){if(!closed)fail(full);}
     }
     private void fail(Throwable error) {
+        if(error instanceof java.io.IOException && !closed) {
+            suspendForReconnect();
+            try { ui.execute(() -> errors.accept(error)); } catch(RejectedExecutionException stopping) { }
+            return;
+        }
         if(!stop())return;
         try{ui.execute(() -> errors.accept(error));}catch(RejectedExecutionException stopping){}
     }
@@ -139,7 +150,7 @@ public final class MovementClientController implements AutoCloseable {
     }
     public ClientWorldState world() { return world; }
     public PredictionController prediction() { return prediction; }
-    public boolean isInputReady() { return !closed && prediction!=null && !world.needsFullState()
+    public boolean isInputReady() { return !closed && !suspended && prediction!=null && !world.needsFullState()
             && world.getMatchState()==com.bombit.server.game.core.GameState.MatchState.RUNNING; }
     public boolean isClosed() { return closed; }
     public InterpolationController interpolation() { return interpolation; }

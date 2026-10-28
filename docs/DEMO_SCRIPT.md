@@ -13,7 +13,7 @@ Nhóm phân công một người điều khiển server/ghi log, một người 
 | 4–5 phút | Nhặt item nếu có, quan sát HUD | Item chỉ thuộc một người; quota/range/speed đổi thống nhất |
 | 5–6 phút | Một người đứng trong vùng nổ, người kia chạy tránh | Chết, WIN và bảng kết quả nhất quán |
 | 6–7 phút | Ready/Start lượt mới; rồi host End round | Reset bom/item/stats/time; End cho ABORTED |
-| 7–8 phút | Chạy 4 client; đóng một client giữa trận | Hủy lượt cho phòng đó; phòng khác nếu đang chạy vẫn tiếp tục |
+| 7–8 phút | Chạy 4 client; ngắt mạng một client giữa trận | Giữ chỗ 30 giây; trận tiếp tục; có mạng lại tự khôi phục; quá hạn loại riêng người đó |
 | 8–9 phút | Hiện CSV 1/2/4 client và phương pháp đo | Phân biệt loopback thực đo với LAN do nhóm bổ sung |
 
 Drop mặc định 75%, không cam kết mỗi block đều sinh item. Để trình diễn item/timeout ổn định,
@@ -30,4 +30,12 @@ Cho tất cả sống đến hết giờ để demo DRAW timeout. Cùng chết v
 các ca này đã có kiểm thử tự động, nhóm vẫn phải quan sát GUI nếu đưa vào video nghiệm thu.
 
 Nếu mạng/GUI lỗi, ghi bước, thời điểm, log và revision; dùng lại CSV loopback đã lưu để giải thích
-phương pháp, không gán nó thành số liệu LAN. Không trình diễn tự động reconnect vì chưa triển khai.
+phương pháp, không gán nó thành số liệu LAN.
+
+Reconnect mặc định bật ở lobby. Giữ ứng dụng client đang mở; tắt Wi-Fi/rút cáp trên
+máy client LAN rồi bật lại trong 30 giây kể từ khi server phát hiện mất kết nối.
+Nhân vật đứng yên và vẫn có thể trúng bom. Nếu trận kết thúc trong lúc mất mạng,
+client nhận kết quả khi kết nối lại. Quá hạn, người đó bị loại; nếu chỉ còn một
+người sống thì trận kết thúc theo luật thắng bình thường.
+Loopback `127.0.0.1` không bị ảnh hưởng bởi tắt Wi-Fi. Đóng/End task client chỉ demo
+loại người hết hạn, không demo tự kết nối lại vì ứng dụng đã ngừng chạy.

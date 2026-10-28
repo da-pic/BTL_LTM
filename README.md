@@ -18,7 +18,8 @@ Bàn giao nhiệm vụ 10 (22/10/2026): [báo cáo/checklist](docs/TASK10_HANDOV
 [số đo và CSV thực tế](docs/NETWORK_MEASUREMENTS.md), [chạy LAN](docs/LAN_GUIDE.md),
 [đóng gói](docs/PACKAGING.md), [báo cáo kỹ thuật](docs/TECHNICAL_REPORT.md),
 [kịch bản demo](docs/DEMO_SCRIPT.md). Đã chạy 112 test và đo TCP loopback 1/2/4 client;
-nghiệm thu GUI và LAN nhiều máy, soak dài hạn vẫn cần nhóm thực hiện. Reconnect chưa bật.
+nghiệm thu GUI và LAN nhiều máy, soak dài hạn vẫn cần nhóm thực hiện.
+Reconnect lobby đã bật mặc định: giữ chỗ 30 giây, trận tiếp tục; hết hạn chỉ loại người mất mạng.
 
 Build bản chạy không cần Maven; chạy JUnit cần Maven. Java 25+ (build cần JDK):
 
@@ -41,8 +42,8 @@ script demo có thể build production bằng javac mà không cần Maven.
 ## Bắt đầu
 
 Độ ổn định: [báo cáo nhiệm vụ 9](docs/TASK9_STABILITY.md) có giới hạn queue/rate,
-deadline và kết quả 108 test cùng stress cục bộ. Reconnect chưa bật;
-xem [đánh giá phạm vi riêng](docs/RECONNECT_ASSESSMENT.md).
+deadline và kết quả 108 test cùng stress cục bộ. Reconnect hiện đã bật;
+xem [cơ chế khôi phục kết nối](docs/RECONNECT_ASSESSMENT.md).
 
 M2 có Connect/Lobby, tạo/join/leave phòng, ready/start, chat, quyền host và chơi lại. Xem
 [docs/M2_LOBBY_LIFECYCLE.md](docs/M2_LOBBY_LIFECYCLE.md) để chạy, xem test thực tế và checklist GUI/LAN còn lại.
@@ -62,7 +63,8 @@ cmd /c scripts\run-client.cmd 127.0.0.1 8888 Chinh
 Khách Ready, host Start; dùng phím mũi tên di chuyển và Space đặt bom. Item tự nhặt khi bước vào ô;
 HUD hiện quota/range/speed và thời gian còn lại. Hết trận tự mở tab Kết quả trong lobby.
 Ready/Start để chơi lại; host End round để hủy lượt hiện tại;
-Leave room để về danh sách phòng. Người rời/mất kết nối sẽ hủy lượt đang chơi cho cả phòng.
+Leave room để về danh sách phòng. Chủ động rời phòng hủy lượt; mất kết nối giữ chỗ 30 giây,
+client tự kết nối lại khi ứng dụng còn mở. Hết hạn chỉ loại người mất mạng.
 
 M1 vẫn có tại [docs/M1_MOVEMENT_DEMO.md](docs/M1_MOVEMENT_DEMO.md): server thêm số người `2`,
 client thêm `--demo` sau tên. `--headless` dành cho smoke M1.
@@ -82,7 +84,7 @@ Công cụ manual-client legacy chưa được nâng cấp handshake.
 
 Tiến độ hiện tại: [item, chết và kết quả trận](docs/TASK8_ITEMS_RESULTS.md).
 Luật mặc định: drop 75%, 3 mạng/người, trận 180 giây, còn một người thắng, cùng hết mạng/hết giờ hòa;
-disconnect hủy lượt. TCP và bảng kết quả offscreen đã kiểm thử; nghiệm thu Swing trực tiếp/LAN
+disconnect giữ chỗ 30 giây rồi loại riêng người mất mạng. TCP và bảng kết quả offscreen đã kiểm thử; nghiệm thu Swing trực tiếp/LAN
 vẫn cần nhóm xác nhận; stress hữu hạn đã chạy ở nhiệm vụ 9. Profile M1 vẫn chỉ di chuyển.
 
 | Thành viên | Thư mục chính | Trách nhiệm |
