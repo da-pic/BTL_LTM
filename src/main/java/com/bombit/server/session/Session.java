@@ -98,6 +98,13 @@ public final class Session {
         }
     }
 
+    /** Releases ownership without closing: used when a RECONNECT frame moves this socket to another session. */
+    public synchronized Socket detachSocket() {
+        Socket current = socket;
+        socket = null;
+        return current;
+    }
+
     private static String requireText(String value, String name) {
         if (value == null || value.isBlank()) {
             throw new IllegalArgumentException(name + " must not be blank");

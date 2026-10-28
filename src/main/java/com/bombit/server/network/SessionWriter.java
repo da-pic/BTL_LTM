@@ -98,10 +98,15 @@ public final class SessionWriter implements OutboundSender, AutoCloseable {
         if (Thread.currentThread() == worker) return;
         try { worker.join(millis); } catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); }
     }
-    @Override public void close() {
+    public void close(boolean closeSocket) {
         synchronized(lifecycle){running=false;accepting=false;queue.clear();}
-        try { socket.close(); } catch (IOException ignored) { }
+        if (closeSocket) {
+            try { socket.close(); } catch (IOException ignored) { }
+        }
         worker.interrupt();
         awaitStopped(1_000);
+    }
+    @Override public void close() {
+        close(true);
     }
 }
