@@ -32,7 +32,7 @@ public final class MovementClientController implements AutoCloseable {
     private boolean resyncPending;
     private final java.util.UUID matchId;
     private final boolean subscribed;
-    private final com.bombit.client.game.bomb.BombScene bombs=new com.bombit.client.game.bomb.BombScene();
+    private final com.bombit.client.ui.game.bomb.BombScene bombs=new com.bombit.client.ui.game.bomb.BombScene();
     private long plantRequest;
     private int respawns;
     private volatile boolean recoverySuspended;
@@ -145,7 +145,7 @@ public final class MovementClientController implements AutoCloseable {
             catch(Exception e) { transportFailed(e,generation); }
         });
     }
-    public com.bombit.client.game.bomb.BombScene bombs() { return bombs; }
+    public com.bombit.client.ui.game.bomb.BombScene bombs() { return bombs; }
     /** No predicted bomb or damage; wait for the authoritative snapshot. */
     public void plantBomb() {
         var local=world.getPlayers().get(localId);

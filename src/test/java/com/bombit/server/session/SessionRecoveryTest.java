@@ -14,10 +14,11 @@ import static org.junit.jupiter.api.Assertions.*;
 @Timeout(8)
 class SessionRecoveryTest {
     @ParameterizedTest
-    @CsvSource({"14999999999,true","15000000000,false","15000000001,false"})
-    void reconnectAdmissionIsPreciseBeforeAtAndAfterFifteenSeconds(long elapsedNanos,boolean admitted) throws Exception {
+    @CsvSource({"15,14999999999,true","15,15000000000,false","15,15000000001,false",
+            "30,29999999999,true","30,30000000000,false","30,30000000001,false"})
+    void reconnectAdmissionIsPreciseAtConfiguredGraceBoundary(long graceSeconds,long elapsedNanos,boolean admitted) throws Exception {
         var clock=new AtomicLong();var timers=new Timers();var events=new Events();
-        try(var manager=new SessionManager(events,15,clock::get,timers);var candidate=new Socket()) {
+        try(var manager=new SessionManager(events,graceSeconds,clock::get,timers);var candidate=new Socket()) {
             var session=playing(manager,new Socket());manager.handleUnexpectedDisconnect(session.getPlayerId());
             clock.set(elapsedNanos);
             assertEquals(admitted,manager.canReconnect(session.getPlayerId(),session.getReconnectToken()));
@@ -25,7 +26,7 @@ class SessionRecoveryTest {
             if(admitted) {assertSame(candidate,session.getSocket());assertEquals(1,events.resumes);}
             else {assertTrue(candidate.isClosed());timers.tasks.getFirst().run();assertTrue(manager.snapshot().isEmpty());}
             assertEquals(0,manager.pendingDisconnectTimers());
-            System.out.println("RECOVERY_BOUNDARY elapsed_nanos="+elapsedNanos+" admitted="+admitted);
+            System.out.println("RECOVERY_BOUNDARY grace_seconds="+graceSeconds+" elapsed_nanos="+elapsedNanos+" admitted="+admitted);
         }
     }
     private static final class Timers extends ScheduledThreadPoolExecutor {

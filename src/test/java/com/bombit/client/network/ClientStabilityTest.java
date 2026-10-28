@@ -1,6 +1,6 @@
 package com.bombit.client.network;
 
-import com.bombit.client.app.DemoClientConnection;
+import com.bombit.client.app.GameClientConnection;
 import com.bombit.common.protocol.*;
 import java.io.IOException;
 import java.net.*;
@@ -36,7 +36,7 @@ class ClientStabilityTest {
     }
     @Test void displayByteBudgetClosesBeforeUiSlotLimitOnLargeFrames()throws Exception{
         var queue=new ArrayBlockingQueue<Runnable>(300);var errors=new AtomicInteger();
-        try(var listener=new ServerSocket(0);var app=new DemoClientConnection(queue::add,c->{},s->{},e->errors.incrementAndGet())){
+        try(var listener=new ServerSocket(0);var app=new GameClientConnection(queue::add,c->{},s->{},e->errors.incrementAndGet())){
             app.connect("127.0.0.1",listener.getLocalPort(),"byte budget");
             try(var peer=listener.accept()){
                 PacketDecoder.decode(peer.getInputStream());var packet=new Packet(PacketType.PONG,"x".repeat(900_000));
@@ -82,7 +82,7 @@ class ClientStabilityTest {
     }
     @Test void stalledUiHasBoundedDispatchAndFailsOnceThenReleasesNetworkAndTimer()throws Exception{
         var queued=new ArrayBlockingQueue<Runnable>(300);var errors=new AtomicInteger();
-        try(var listener=new ServerSocket(0);var app=new DemoClientConnection(queued::add,c->{},s->{},e->errors.incrementAndGet())){
+        try(var listener=new ServerSocket(0);var app=new GameClientConnection(queued::add,c->{},s->{},e->errors.incrementAndGet())){
             app.connect("127.0.0.1",listener.getLocalPort(),"stalled UI");
             try(var peer=listener.accept()){
                 PacketDecoder.decode(peer.getInputStream());

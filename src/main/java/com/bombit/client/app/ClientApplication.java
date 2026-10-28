@@ -1,7 +1,8 @@
 package com.bombit.client.app;
 
-import com.bombit.client.game.movement.MovementGameWindow;
+import com.bombit.client.ui.game.MovementGameWindow;
 import com.bombit.server.game.model.Direction;
+import com.bombit.client.ui.UiTheme;
 import javax.swing.*;
 import java.awt.*;
 import java.awt.event.*;
@@ -12,33 +13,38 @@ import java.util.concurrent.atomic.AtomicReference;
 public final class ClientApplication {
     private ClientApplication() { }
     public static void main(String[] args) throws Exception {
+        UiTheme.install();
         String host = args.length > 0 ? args[0] : "127.0.0.1";
         int port = args.length > 1 ? Integer.parseInt(args[1]) : 8888;
-        String name = args.length > 2 ? args[2] : "Player";
+        String name = args.length > 2 ? args[2] : "";
         if (args.length > 3 && args[3].equals("--headless")) {
             headless(host, port, name, args.length > 4 ? Integer.parseInt(args[4]) : 4);
             return;
         }
         if (GraphicsEnvironment.isHeadless()) throw new IllegalStateException("Use --headless for a console smoke check");
         if(args.length<4 || !args[3].equals("--demo")) {
-            SwingUtilities.invokeLater(() -> new com.bombit.client.lobby.LobbyWindow(host,port,name).setVisible(true));
+            SwingUtilities.invokeLater(() -> new com.bombit.client.lobby.LobbyWindow(host,port,"").setVisible(true));
             return;
         }
         SwingUtilities.invokeLater(() -> {
             var waiting = new JFrame("Bomb It - " + name);
-            var label = new JLabel("Connecting...", SwingConstants.CENTER);
-            waiting.add(label); waiting.setSize(420, 130); waiting.setLocationByPlatform(true);
+            var label = new JLabel("Đang kết nối đến máy chủ...", SwingConstants.CENTER);
+            label.setFont(UiTheme.HEADING);label.setForeground(UiTheme.TEXT);
+            var content=UiTheme.card(new BorderLayout());content.setBorder(BorderFactory.createEmptyBorder(24,24,24,24));
+            content.add(label);waiting.setContentPane(content);waiting.setSize(440, 140); waiting.setLocationByPlatform(true);
             waiting.setDefaultCloseOperation(WindowConstants.DO_NOTHING_ON_CLOSE);
             var gameWindow = new AtomicReference<MovementGameWindow>();
-            var owner = new AtomicReference<DemoClientConnection>();
-            var client = new DemoClientConnection(SwingUtilities::invokeLater, movement -> {
+            var owner = new AtomicReference<GameClientConnection>();
+            var client = new GameClientConnection(SwingUtilities::invokeLater, movement -> {
                 waiting.dispose();
                 var window = new MovementGameWindow(movement, owner.get().localId(), () -> owner.get().close());
                 gameWindow.set(window); window.setVisible(true);
             }, label::setText, error -> {
                 if (gameWindow.get() != null) gameWindow.get().showError(error.getMessage());
-                else label.setText("Connection failed: " + error.getMessage());
+                else label.setText("Kết nối thất bại: " + error.getMessage());
             });
+            // Server M1 không hỗ trợ lobby recovery; giữ lỗi ngắt kết nối theo profile demo.
+            client.setAutoReconnect(false);
             owner.set(client);
             waiting.addWindowListener(new WindowAdapter() {
                 @Override public void windowClosing(WindowEvent event) { client.close(); waiting.dispose(); }
@@ -46,7 +52,7 @@ public final class ClientApplication {
             waiting.setVisible(true);
             var connector = new Thread(() -> {
                 try { client.connect(host, port, name); }
-                catch (Exception error) { SwingUtilities.invokeLater(() -> label.setText("Connection failed: " + error.getMessage())); }
+                catch (Exception error) { SwingUtilities.invokeLater(() -> label.setText("Kết nối thất bại: " + error.getMessage())); }
             }, "Demo-Client-Connect");
             connector.setDaemon(true); connector.start();
         });
@@ -56,7 +62,8 @@ public final class ClientApplication {
         if (seconds < 1 || seconds > 60) throw new IllegalArgumentException("Smoke duration must be 1..60 seconds");
         var ui = Executors.newSingleThreadExecutor();
         var failure = new AtomicReference<Throwable>();
-        try (var client = new DemoClientConnection(ui, movement -> { }, message -> { }, failure::set)) {
+        try (var client = new GameClientConnection(ui, movement -> { }, message -> { }, failure::set)) {
+            client.setAutoReconnect(false);
             client.connect(host, port, name);
             long end = System.nanoTime() + TimeUnit.SECONDS.toNanos(seconds);
             boolean ready = false;

@@ -1,6 +1,6 @@
 package com.bombit.integration;
 
-import com.bombit.client.app.DemoClientConnection;
+import com.bombit.client.app.GameClientConnection;
 import com.bombit.common.protocol.*;
 import com.bombit.server.app.LobbyGameServer;
 import com.bombit.server.game.bomb.*;
@@ -27,7 +27,7 @@ class BombClientIntegrationTest {
         final Queue<Throwable> failures=new ConcurrentLinkedQueue<>();
         final BlockingQueue<Packet> lobby=new LinkedBlockingQueue<>();
         final Queue<String> statuses=new ConcurrentLinkedQueue<>();
-        final DemoClientConnection connection=new DemoClientConnection(ui,c->{},statuses::add,failures::add);
+        final GameClientConnection connection=new GameClientConnection(ui,c->{},statuses::add,failures::add);
         Client(int port,String name)throws Exception {
             connection.setLobbyListener(lobby::add);connection.connect("127.0.0.1",port,name);
         }

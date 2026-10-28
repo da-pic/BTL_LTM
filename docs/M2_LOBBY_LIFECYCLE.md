@@ -76,7 +76,7 @@ movement/prediction/TCP, runtime/thread cleanup và delta compression. Log là o
 không đưa `target/` vào kiểm kê hoặc commit.
 
 `LobbyLifecycleTest` dùng socket TCP thật tới `LobbyGameServer`, gồm hai phòng/tối đa năm client,
-và hai `DemoClientConnection` thật với UI executor để kiểm tra controller/heartbeat/đổi trận.
+và hai `GameClientConnection` thật với UI executor để kiểm tra controller/heartbeat/đổi trận.
 Kiểm thử này không bấm nút Swing và không thay thế kiểm tra nhiều máy.
 
 ## File được tạo/sửa trong nhiệm vụ 5
@@ -91,7 +91,7 @@ Kiểm thử này không bấm nút Swing và không thay thế kiểm tra nhi�
 | src/main/java/com/bombit/common/protocol/LobbyJson.java, LobbyPacketCodec.java (mới) | TV4 | DTO/JSON lobby có giới hạn và kiểm tra field |
 | src/main/java/com/bombit/common/protocol/PacketType.java, MatchEnvelopeCodec.java | TV4 | LIST_ROOMS và END_GAME, không đổi mã cũ |
 | src/main/java/com/bombit/client/lobby/LobbyWindow.java (mới) | TV1 | Connect, danh sách phòng, ready/host/chat/end/leave, mở lại movement window |
-| src/main/java/com/bombit/client/app/DemoClientConnection.java | TV4 | Dùng chung M1/M2, lỗi yêu cầu có thể thử lại, GAME_OVER, bỏ snapshot cũ, guard resync cũ |
+| src/main/java/com/bombit/client/app/GameClientConnection.java | TV4 | Dùng chung M1/M2, lỗi yêu cầu có thể thử lại, GAME_OVER, bỏ snapshot cũ, guard resync cũ |
 | src/main/java/com/bombit/client/app/ClientApplication.java | TV4 | Mặc định lobby UI, giữ --demo/--headless M1 |
 | src/main/java/com/bombit/client/game/movement/MovementGameWindow.java | TV2 | Dừng input/render và dispose mà không đóng kết nối lobby |
 | src/test/java/com/bombit/integration/LobbyLifecycleTest.java (mới) | TV4, phối hợp TV1/TV2 | 7 test TCP/controller, kiểm tra cleanup thực tế |

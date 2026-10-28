@@ -164,7 +164,7 @@ public final class RoomManager {
     public static com.bombit.common.protocol.LobbyPacketCodec.RoomView view(Room room) {
         synchronized (room) {
             return new com.bombit.common.protocol.LobbyPacketCodec.RoomView(room.getRoomId(), room.getRoomName(),
-                    room.getHostPlayerId(), room.getState().name(), room.getMaxPlayers(),
+                    room.getHostPlayerId(), room.getState().name(), room.getMaxPlayers(), room.getMapSelection(),
                     room.getPlayersSnapshot().stream().map(p -> new com.bombit.common.protocol.LobbyPacketCodec.Player(
                             p.getPlayerId(), p.getUsername(), p.getState().name())).toList());
         }

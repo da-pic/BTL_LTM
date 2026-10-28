@@ -16,6 +16,7 @@ public final class PacketType {
     public static final short READY = 0x0013;
     public static final short START_GAME = 0x0014;
     public static final short GAME_STARTED = 0x0015;
+    public static final short SET_MAP_SELECTION = 0x0019;
     public static final short LEAVE_ROOM = 0x0016;
     public static final short CHAT = 0x0017;
     public static final short LIST_ROOMS = 0x0018;
@@ -48,6 +49,7 @@ public final class PacketType {
         names.put(CREATE_ROOM, "CREATE_ROOM"); names.put(JOIN_ROOM, "JOIN_ROOM");
         names.put(ROOM_STATE, "ROOM_STATE"); names.put(READY, "READY");
         names.put(START_GAME, "START_GAME"); names.put(GAME_STARTED, "GAME_STARTED");
+        names.put(SET_MAP_SELECTION, "SET_MAP_SELECTION");
         names.put(LEAVE_ROOM, "LEAVE_ROOM"); names.put(CHAT, "CHAT");
         names.put(LIST_ROOMS, "LIST_ROOMS"); names.put(END_GAME, "END_GAME");
         names.put(MOVE, "MOVE"); names.put(PLANT_BOMB, "PLANT_BOMB");

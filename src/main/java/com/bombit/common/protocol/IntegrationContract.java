@@ -7,7 +7,7 @@ public final class IntegrationContract {
     public static final int MAX_PLAYERS = 4;
     public static final int HEARTBEAT_INTERVAL_MILLIS = 2_000;
     public static final int HEARTBEAT_TIMEOUT_MILLIS = 10_000;
-    public static final int RECONNECT_GRACE_MILLIS = 15_000;
+    public static final int RECONNECT_GRACE_MILLIS = 30_000;
     public static final int RESYNC_MIN_INTERVAL_MILLIS = 1_000;
 
     private IntegrationContract() { }

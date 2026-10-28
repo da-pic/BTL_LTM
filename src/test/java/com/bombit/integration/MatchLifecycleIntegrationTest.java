@@ -88,6 +88,7 @@ class MatchLifecycleIntegrationTest {
     }
     @Test void pickupStatsWinnerFinalSnapshotReplayAndDisconnectAreAuthoritative()throws Exception{
         try(var f=new Fixture(s->{});var a=new Peer(f,"A");var b=new Peer(f,"B")){
+            f.server.setSeamlessRecovery(false); // Explicit coverage of the legacy abort policy.
             String room=start(a,b);var first=a.match.matchId();
             a.scoped(BombPacketCodec.plant(1));a.until(w->w.getEntities().containsKey("BOMB:1"));a.moves(Direction.DOWN,1,12);
             f.nanos.set(1_000_000_000L);a.until(w->w.getEntities().containsKey("ITEM:1"));

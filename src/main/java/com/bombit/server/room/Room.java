@@ -1,5 +1,6 @@
 package com.bombit.server.room;
 
+import com.bombit.common.dto.MapSelection;
 import com.bombit.server.session.Session;
 import com.bombit.server.session.SessionState;
 
@@ -16,6 +17,7 @@ public final class Room {
     private final List<Session> players = new ArrayList<>();
     private String hostPlayerId;
     private State state = State.WAITING;
+    private MapSelection mapSelection = MapSelection.RANDOM;
 
     public Room(String roomId, String roomName, int maxPlayers, Session host) {
         this.roomId = Objects.requireNonNull(roomId);
@@ -67,5 +69,11 @@ public final class Room {
     public int getMaxPlayers() { return maxPlayers; }
     public synchronized String getHostPlayerId() { return hostPlayerId; }
     public synchronized State getState() { return state; }
+    public synchronized MapSelection getMapSelection() { return mapSelection; }
+    public synchronized boolean setMapSelection(MapSelection selection) {
+        if (state != State.WAITING) return false;
+        mapSelection = Objects.requireNonNull(selection);
+        return true;
+    }
     public synchronized boolean isEmpty() { return players.isEmpty(); }
 }

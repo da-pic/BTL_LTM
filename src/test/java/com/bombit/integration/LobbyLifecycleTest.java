@@ -1,8 +1,9 @@
 package com.bombit.integration;
 
-import com.bombit.client.app.DemoClientConnection;
+import com.bombit.client.app.GameClientConnection;
 import com.bombit.client.network.ClientNetwork;
 import com.bombit.common.dto.MatchContext;
+import com.bombit.common.dto.MapTheme;
 import com.bombit.common.protocol.*;
 import com.bombit.server.app.*;
 import com.bombit.server.game.core.*;
@@ -69,10 +70,14 @@ class LobbyLifecycleTest {
             c.command(PacketType.JOIN_ROOM,Map.of("roomId",id));c.error("ROOM_FULL");
             b.command(PacketType.READY,Map.of("roomId",UUID.randomUUID().toString(),"ready",true));b.error("NOT_IN_ROOM");
             b.command(PacketType.START_GAME);b.error("NOT_HOST");
+            b.command(PacketType.SET_MAP_SELECTION,Map.of("mapSelection","ICE"));b.error("NOT_HOST");
+            a.command(PacketType.SET_MAP_SELECTION,Map.of("mapSelection","FIRE"));
+            var selected=LobbyPacketCodec.decodeRoom(a.until(p->p.getType()==PacketType.ROOM_STATE&&LobbyPacketCodec.decodeRoom(p).mapSelection().name().equals("FIRE")));
+            assertEquals("FIRE",selected.mapSelection().name());
             a.command(PacketType.START_GAME);a.error("NOT_READY");
             b.command(PacketType.READY,Map.of("ready",true));b.command(PacketType.READY,Map.of("ready",true));
             b.until(p->p.getType()==PacketType.ROOM_STATE&&LobbyPacketCodec.decodeRoom(p).players().stream().anyMatch(v->v.playerId().equals(b.id)&&v.state().equals("READY")));
-            a.command(PacketType.START_GAME);var match=DemoPacketCodec.decodeStarted(a.take(PacketType.GAME_STARTED));b.take(PacketType.GAME_STARTED);
+            a.command(PacketType.START_GAME);var match=DemoPacketCodec.decodeStarted(a.take(PacketType.GAME_STARTED));b.take(PacketType.GAME_STARTED);assertEquals(MapTheme.FIRE,match.mapTheme());
             c.command(PacketType.JOIN_ROOM,Map.of("roomId",id));c.error("ROOM_PLAYING");
             b.send(MatchEnvelopeCodec.wrap(match.matchId(),new Packet(PacketType.END_GAME,"{}")));b.error("NOT_HOST");
             a.send(MatchEnvelopeCodec.wrap(UUID.randomUUID(),new Packet(PacketType.END_GAME,"{}")));a.error("STALE_MATCH");
@@ -163,6 +168,10 @@ class LobbyLifecycleTest {
 
                 // Server emits full state sync or snapshot to sync client A
                 Packet syncOrSnap = netA2.receive(Duration.ofSeconds(5));
+                while (syncOrSnap != null && syncOrSnap.getType() != PacketType.FULL_STATE_SYNC
+                        && syncOrSnap.getType() != PacketType.GAME_SNAPSHOT) {
+                    syncOrSnap = netA2.receive(Duration.ofSeconds(5));
+                }
                 assertNotNull(syncOrSnap);
                 assertEquals(PacketType.FULL_STATE_SYNC,syncOrSnap.getType());
                 assertTrue(snapshot(syncOrSnap,matchA).isFullState());
@@ -202,7 +211,7 @@ class LobbyLifecycleTest {
     }
     @Test void realClientControllersReturnToRoomAndReplayOnSameTcpConnections() throws Exception {
         var ui=Executors.newSingleThreadExecutor();var failure=new AtomicReference<Throwable>();var ended=new AtomicInteger();
-        try(var f=new Fixture();var a=new DemoClientConnection(ui,m->{},s->{},failure::set);var b=new DemoClientConnection(ui,m->{},s->{},failure::set)) {
+        try(var f=new Fixture();var a=new GameClientConnection(ui,m->{},s->{},failure::set);var b=new GameClientConnection(ui,m->{},s->{},failure::set)) {
             var room=new AtomicReference<LobbyPacketCodec.RoomView>();
             a.setLobbyListener(p->{if(p.getType()==PacketType.ROOM_STATE) room.set(LobbyPacketCodec.decodeRoom(p));if(p.getType()==PacketType.GAME_OVER)ended.incrementAndGet();});
             b.setLobbyListener(p->{if(p.getType()==PacketType.GAME_OVER)ended.incrementAndGet();});
@@ -231,10 +240,11 @@ class LobbyLifecycleTest {
         var failureB=new AtomicReference<Throwable>();
         var statusA=new CopyOnWriteArrayList<String>();
         try(var f=new Fixture();
-            var a=new DemoClientConnection(ui,m->{},statusA::add,failureA::set);
-            var b=new DemoClientConnection(ui,m->{},s->{},failureB::set)) {
+            var a=new GameClientConnection(ui,m->{},statusA::add,failureA::set);
+            var b=new GameClientConnection(ui,m->{},s->{},failureB::set)) {
             f.server.setSeamlessRecovery(true);
-            a.setAutoReconnect(true);
+            assertTrue(f.server.isSeamlessRecovery());
+            assertTrue(a.isAutoReconnect());
             var room=new AtomicReference<LobbyPacketCodec.RoomView>();
             a.setLobbyListener(p->{if(p.getType()==PacketType.ROOM_STATE) room.set(LobbyPacketCodec.decodeRoom(p));});
             a.connect("127.0.0.1",f.server.port(),"A");
@@ -251,6 +261,8 @@ class LobbyLifecycleTest {
             assertNull(failureA.get());
             assertNull(failureB.get());
             assertNotNull(a.reconnectToken());
+            ui.submit(() -> a.movement().send(a.movement().prediction().predict(Direction.RIGHT, true))).get();
+            actorAwait(ui, () -> b.movement().world().getPlayers().get(a.localId()).getLastProcessedInput() >= 1);
 
             // Drop client A's active socket on server side (simulating sudden Wi-Fi loss)
             var sessionA = f.server.transport().getSessionManager().find(a.sessionId()).orElseThrow();
@@ -266,7 +278,7 @@ class LobbyLifecycleTest {
 
             // Movement still functions after reconnect
             ui.submit(() -> a.movement().send(a.movement().prediction().predict(Direction.RIGHT, true))).get();
-            actorAwait(ui, () -> b.movement().world().getPlayers().get(a.localId()).getLastProcessedInput() >= 1);
+            actorAwait(ui, () -> b.movement().world().getPlayers().get(a.localId()).getLastProcessedInput() >= 2);
 
             assertNull(failureA.get());
             assertNull(failureB.get());
@@ -296,7 +308,7 @@ class LobbyLifecycleTest {
             assertEquals(a.id,SessionPacketCodec.decodeAcknowledgement(ack).playerId());
             var started=recovered.receive(Duration.ofSeconds(3));assertNotNull(started);
             assertEquals(match.matchId(),DemoPacketCodec.decodeStarted(started).matchId());
-            var full=recovered.receive(Duration.ofSeconds(3));assertNotNull(full);
+            var full=recoveryPacket(recovered,PacketType.FULL_STATE_SYNC);
             assertEquals(PacketType.FULL_STATE_SYNC,full.getType());assertTrue(snapshot(full,match).isFullState());
             assertNotSame(oldSocket,session.getSocket());assertTrue(oldSocket.isClosed());
             int player=match.playerId(a.id).orElseThrow();
@@ -359,10 +371,10 @@ class LobbyLifecycleTest {
             var started=recovered.receive(Duration.ofSeconds(3));assertNotNull(started);
             assertEquals(PacketType.GAME_STARTED,started.getType());
             recovered.send(MatchEnvelopeCodec.wrap(match.matchId(),MovePacketCodec.encode(new MovePacketCodec.Input(99,Direction.RIGHT,true))));
-            var error=recovered.receive(Duration.ofSeconds(3));assertNotNull(error);
+            var error=recoveryPacket(recovered,PacketType.ERROR);
             assertEquals("NOT_READY",SessionPacketCodec.errorCode(error));
             release.countDown();
-            var full=recovered.receive(Duration.ofSeconds(3));assertNotNull(full);
+            var full=recoveryPacket(recovered,PacketType.FULL_STATE_SYNC);
             assertEquals(PacketType.FULL_STATE_SYNC,full.getType());var state=snapshot(full,match);assertTrue(state.isFullState());
             int player=match.playerId(a.id).orElseThrow();
             assertEquals(0,state.getPlayers().stream().filter(p->p.getId()==player).findFirst().orElseThrow().getLastProcessedInput());
@@ -402,6 +414,57 @@ class LobbyLifecycleTest {
             assertEquals(0,f.server.transport().getSessionManager().pendingDisconnectTimers());
         } finally {release.countDown();}
     }
+    @Test void expiredPlayerIsRemovedWithoutAbortingRemainingPlayers() throws Exception {
+        try(var f=new Fixture();var a=new Peer(f,"A");var b=new Peer(f,"B");var c=new Peer(f,"C")) {
+            f.server.setSeamlessRecovery(true);
+            String room=create(a,4);join(b,room);join(c,room);ready(b);ready(c);
+            a.command(PacketType.START_GAME);
+            var match=DemoPacketCodec.decodeStarted(a.take(PacketType.GAME_STARTED));
+            b.take(PacketType.GAME_STARTED);c.take(PacketType.GAME_STARTED);assertFull(b,match);
+            a.close();
+            waitFor(()->f.server.transport().getSessionManager().find(a.id).orElseThrow().getState()==SessionState.DISCONNECTED);
+            // Exercise exactly the same removal callback as the grace timer.
+            f.server.transport().getSessionManager().hardDrop(a.id);
+            int removed=match.playerId(a.id).orElseThrow();
+            b.until(p->p.getType()==PacketType.GAME_SNAPSHOT&&snapshot(p,match).getRemovedPlayerIds().contains(removed));
+            assertEquals(1,f.server.activeMatchCount());
+            assertEquals(2,f.server.transport().getRoomManager().find(room).getPlayersSnapshot().size());
+            assertTrue(b.history.stream().noneMatch(p->p.getType()==PacketType.GAME_OVER));
+        }
+    }
+    @Test void reconnectAfterRoundEndsReceivesFinalResultAndRoom() throws Exception {
+        try(var f=new Fixture();var a=new Peer(f,"A");var b=new Peer(f,"B")) {
+            f.server.setSeamlessRecovery(true);
+            create(a,2);join(b,a.room.roomId());ready(b);a.command(PacketType.START_GAME);
+            var match=DemoPacketCodec.decodeStarted(a.take(PacketType.GAME_STARTED));
+            b.take(PacketType.GAME_STARTED);assertFull(b,match);b.close();
+            waitFor(()->f.server.transport().getSessionManager().find(b.id).orElseThrow().getState()==SessionState.DISCONNECTED);
+            a.send(MatchEnvelopeCodec.wrap(match.matchId(),new Packet(PacketType.END_GAME,"{}")));
+            a.take(PacketType.GAME_OVER);
+            try(var resumed=new ClientNetwork()) {
+                resumed.connect("127.0.0.1",f.server.port());
+                resumed.send(SessionPacketCodec.reconnectRequest(b.id,b.token));
+                assertEquals(PacketType.CONNECT_ACK,resumed.receive(Duration.ofSeconds(5)).getType());
+                var result=resumed.receive(Duration.ofSeconds(5));
+                assertEquals(PacketType.GAME_OVER,result.getType());
+                assertEquals(com.bombit.common.dto.MatchResult.Reason.ABORTED,
+                        GameplayPacketCodec.decodeResult(MatchEnvelopeCodec.unwrap(result,match.matchId())).reason());
+                assertEquals(SessionState.IN_ROOM,f.server.transport().getSessionManager().find(b.id).orElseThrow().getState());
+            }
+        }
+    }
+    private static Packet recoveryPacket(ClientNetwork network,short expectedType)throws Exception {
+        long end=System.nanoTime()+TimeUnit.SECONDS.toNanos(3);
+        while(System.nanoTime()<end){
+            Packet packet=network.receive(Duration.ofMillis(100));if(packet==null)continue;
+            if(packet.getType()==expectedType)return packet;
+            // ROOM_STATE/LIST_ROOMS có thể xen giữa metadata và full; không bỏ qua
+            // snapshot/delta hoặc ERROR sai thứ tự vì chúng là lỗi contract thực.
+            assertTrue(packet.getType()==PacketType.ROOM_STATE||packet.getType()==PacketType.LIST_ROOMS
+                    ||packet.getType()==PacketType.PONG,"Unexpected recovery packet: "+PacketType.nameOf(packet.getType()));
+        }
+        throw new AssertionError("Missing recovery packet: "+PacketType.nameOf(expectedType));
+    }
     private static void actorAwait(ExecutorService ui,BooleanSupplier condition)throws Exception {waitFor(()->{try{return ui.submit(condition::getAsBoolean).get();}catch(Exception e){throw new RuntimeException(e);}});}
     private static void waitFor(BooleanSupplier condition)throws Exception {long end=System.nanoTime()+TimeUnit.SECONDS.toNanos(5);while(!condition.getAsBoolean()){if(System.nanoTime()>end)fail("Condition timed out");Thread.sleep(10);}}
     private static String create(Peer a,int capacity)throws Exception {a.command(PacketType.CREATE_ROOM,Map.of("roomName","Room "+a.id,"maxPlayers",capacity));a.room=LobbyPacketCodec.decodeRoom(a.take(PacketType.ROOM_STATE));return a.room.roomId();}
@@ -435,6 +498,8 @@ class LobbyLifecycleTest {
         Fixture()throws Exception {this(null);}Fixture(GameRuntimeManager games)throws Exception {
             this.games=games==null?new GameRuntimeManager(id->DemoGameServer.map(),(id,state)->GameplayExtension.none()):games;
             server=new LobbyGameServer(0,this.games);
+            // Các ca lobby cũ kiểm tra policy hard drop; từng ca recovery bật riêng.
+            server.setSeamlessRecovery(false);
             thread=new Thread(()->{try{server.start();}catch(Throwable e){failure.set(e);}},"lobby-test-server");thread.start();
         }
         public void close()throws Exception {

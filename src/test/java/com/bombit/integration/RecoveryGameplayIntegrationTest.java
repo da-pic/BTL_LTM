@@ -27,8 +27,8 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import static org.junit.jupiter.api.Assertions.*;
 
-/** TCP + gameplay thật. Chỉ clock gameplay được điều khiển; grace mạng vẫn là 15 giây thực. */
-@Timeout(35)
+/** TCP + gameplay thật. Chỉ clock gameplay được điều khiển; grace mặc định là 30 giây thực. */
+@Timeout(45)
 class RecoveryGameplayIntegrationTest {
     @Test void manyInputsAndBombsSurviveThreeRecoveriesWithFullThenDelta() throws Exception {
         try(var f=new Fixture(30000,3)) {
@@ -124,20 +124,22 @@ class RecoveryGameplayIntegrationTest {
             assertEquals(eliminated?MatchResult.Reason.LAST_ALIVE:MatchResult.Reason.TIMEOUT,result.reason());
             if(eliminated)assertEquals(2,result.winnerPlayerId());else assertNull(result.winnerPlayerId());
             waitFor(()->f.server.activeMatchCount()==0&&f.server.snapshotWorkerCount()==0);
-            assertFalse(runtime.isThreadAlive());f.rejectEndedRecovery(a);
-            waitFor(()->f.server.transport().getSessionManager().find(a.id).isEmpty());
+            assertFalse(runtime.isThreadAlive());f.recoverEndedResult(a,result);
+            assertEquals(SessionState.IN_ROOM,f.server.transport().getSessionManager().find(a.id).orElseThrow().getState());
             assertEquals(0,f.server.activeMatchCount());assertEquals(0,f.server.transport().getSessionManager().pendingDisconnectTimers());
-            assertTrue(f.server.transport().getSessionManager().failure().isEmpty(),"Expected denial must not be recorded as server failure");
-            System.out.println("RECOVERY_CASE ended_during_grace reason="+result.reason()+" resurrected=false");
+            assertTrue(f.server.transport().getSessionManager().failure().isEmpty());
+            System.out.println("RECOVERY_CASE ended_during_grace reason="+result.reason()+" result_replayed=true resurrected=false");
         }
     }
-    @Test void realFifteenSecondGraceExpiresAbortsAndRejectsLateTokenWithCleanup() throws Exception {
-        assertEquals(15,Server.RECONNECT_GRACE_SECONDS);
+    @Test void realThirtySecondGraceForfeitsPlayerAndRejectsLateTokenWithCleanup() throws Exception {
+        assertEquals(30,Server.RECONNECT_GRACE_SECONDS);
         try(var f=new Fixture(30000,3)) {
             var a=f.peer("A");var b=f.peer("B");f.start(a,b);var runtime=f.game();
             a.drop();f.awaitDisconnected(a);long began=System.nanoTime();
-            Packet over=b.until(p->p.getType()==PacketType.GAME_OVER,Duration.ofSeconds(20));
-            assertEquals(MatchResult.Reason.ABORTED,GameplayPacketCodec.decodeResult(MatchEnvelopeCodec.unwrap(over,b.context.matchId())).reason());
+            Packet over=b.until(p->p.getType()==PacketType.GAME_OVER,Duration.ofSeconds(35));
+            var result=GameplayPacketCodec.decodeResult(MatchEnvelopeCodec.unwrap(over,b.context.matchId()));
+            assertEquals(MatchResult.Reason.LAST_ALIVE,result.reason());
+            assertEquals(b.context.playerId(b.id).orElseThrow(),result.winnerPlayerId());
             long elapsed=TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-began);
             waitFor(()->f.server.transport().getSessionManager().find(a.id).isEmpty()
                     &&f.server.activeMatchCount()==0&&f.server.snapshotWorkerCount()==0);
@@ -150,7 +152,7 @@ class RecoveryGameplayIntegrationTest {
             b.until(p->p.getType()==PacketType.ROOM_STATE&&LobbyPacketCodec.decodeRoom(p).players().size()==1);
             var room=f.server.transport().getRoomManager().find(f.room);
             assertEquals(b.id,room.getHostPlayerId());assertEquals(com.bombit.server.room.Room.State.WAITING,room.getState());
-            System.out.println("RECOVERY_CASE real_grace configured_seconds=15 observed_wait_ms="+elapsed+" late_token_rejected=true");
+            System.out.println("RECOVERY_CASE real_grace configured_seconds=30 observed_wait_ms="+elapsed+" forfeit=true late_token_rejected=true");
         }
     }
     @Test void applicationClientAutomaticallyRecoversThreeTimesWithBombAndStableController() throws Exception {
@@ -271,16 +273,18 @@ class RecoveryGameplayIntegrationTest {
             a.command(PacketType.START_GAME,Map.of());a.until(p->isSnapshot(p)&&a.lastUpdate.isFullState());b.until(p->isSnapshot(p)&&b.lastUpdate.isFullState());runtime=game();
         }
         void awaitDisconnected(Peer p)throws Exception {waitFor(()->server.transport().getSessionManager().find(p.id).orElseThrow().getState()==SessionState.DISCONNECTED);}
-        void rejectEndedRecovery(Peer a)throws Exception {
-            try(var attempted=new ClientNetwork()) {
-                attempted.connect("127.0.0.1",server.port());attempted.send(SessionPacketCodec.reconnectRequest(a.id,a.token));
-                long end=System.nanoTime()+TimeUnit.SECONDS.toNanos(3);
-                while(System.nanoTime()<end){var packet=attempted.receive(Duration.ofMillis(50));
-                    if(packet!=null){assertNotEquals(PacketType.GAME_STARTED,packet.getType());assertFalse(isSnapshot(packet));}
-                    if(!attempted.isConnected()&&attempted.getQueuedPacketCount()==0)break;
-                }
-                assertFalse(attempted.isConnected());
-            }
+        void recoverEndedResult(Peer a,MatchResult expected)throws Exception {
+            a.net=new ClientNetwork();a.net.connect("127.0.0.1",server.port());
+            a.send(SessionPacketCodec.reconnectRequest(a.id,a.token));
+            var ack=a.until(p->p.getType()==PacketType.CONNECT_ACK);
+            assertEquals(a.id,SessionPacketCodec.decodeAcknowledgement(ack).playerId());a.handshaken=true;
+            var over=a.until(p->{
+                assertNotEquals(PacketType.GAME_STARTED,p.getType());assertFalse(isSnapshot(p));
+                return p.getType()==PacketType.GAME_OVER;
+            });
+            assertEquals(expected,GameplayPacketCodec.decodeResult(MatchEnvelopeCodec.unwrap(over,a.context.matchId())));
+            a.until(p->p.getType()==PacketType.ROOM_STATE);
+            assertTrue(a.net.isConnected());
         }
         public void close()throws Exception {
             heartbeat.shutdownNow();assertTrue(heartbeat.awaitTermination(2,TimeUnit.SECONDS));

@@ -1,5 +1,6 @@
 package com.bombit.common.protocol;
 
+import com.bombit.common.dto.MapSelection;
 import java.util.*;
 import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
@@ -12,6 +13,7 @@ class LobbyContractTest {
         var frame=PacketEncoder.encode(LobbyPacketCodec.roomState(view));
         assertEquals(view,LobbyPacketCodec.decodeRoom(PacketDecoder.decode(new java.io.ByteArrayInputStream(frame))));
         assertEquals(List.of(view),LobbyPacketCodec.decodeRooms(LobbyPacketCodec.roomList(List.of(view))));
+        assertEquals(MapSelection.RANDOM,view.mapSelection());
         var chat=new LobbyPacketCodec.Chat(room,host,"Chinh \ud83c\udfae","hello \"world\" \\ \u0111");
         assertEquals(chat,LobbyPacketCodec.decodeChat(LobbyPacketCodec.chat(chat)));
         assertEquals("CHAT",PacketType.nameOf((short)0x0017));assertFalse(PacketType.isKnown((short)0x0050));

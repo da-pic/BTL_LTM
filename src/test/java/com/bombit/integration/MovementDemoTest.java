@@ -1,6 +1,6 @@
 package com.bombit.integration;
 
-import com.bombit.client.app.DemoClientConnection;
+import com.bombit.client.app.GameClientConnection;
 import com.bombit.client.game.movement.ClientWorldState;
 import com.bombit.client.network.ClientNetwork;
 import com.bombit.common.dto.MatchContext;
@@ -33,8 +33,9 @@ class MovementDemoTest {
         var ui=Executors.newSingleThreadExecutor();
         var errors=new java.util.concurrent.atomic.AtomicInteger();
         try(var fixture=new Fixture(2);
-            var a=new DemoClientConnection(ui,movement->{},status->{},error->errors.incrementAndGet());
-            var b=new DemoClientConnection(ui,movement->{},status->{},error->errors.incrementAndGet())) {
+            var a=new GameClientConnection(ui,movement->{},status->{},error->errors.incrementAndGet());
+            var b=new GameClientConnection(ui,movement->{},status->{},error->errors.incrementAndGet())) {
+            a.setAutoReconnect(false);b.setAutoReconnect(false); // M1 has no resume admission.
             a.connect("127.0.0.1",fixture.server.port(),"A");b.connect("127.0.0.1",fixture.server.port(),"B");
             awaitActor(ui,()->a.movement()!=null&&b.movement()!=null&&a.movement().isInputReady()&&b.movement().isInputReady());
             fixture.close();
@@ -117,8 +118,8 @@ class MovementDemoTest {
         var ui = Executors.newSingleThreadExecutor();
         var errors = new AtomicReference<Throwable>();
         try (var fixture = new Fixture(2);
-             var a = new DemoClientConnection(ui, movement->{}, status->{}, errors::set);
-             var b = new DemoClientConnection(ui, movement->{}, status->{}, errors::set)) {
+             var a = new GameClientConnection(ui, movement->{}, status->{}, errors::set);
+             var b = new GameClientConnection(ui, movement->{}, status->{}, errors::set)) {
             a.connect("127.0.0.1",fixture.server.port(),"Controller A");
             b.connect("127.0.0.1",fixture.server.port(),"Controller B");
             awaitActor(ui, () -> a.movement()!=null && b.movement()!=null && a.movement().isInputReady() && b.movement().isInputReady());

@@ -27,7 +27,7 @@ import java.util.concurrent.TimeUnit;
 public final class Server implements AutoCloseable {
     public static final int DEFAULT_PORT = 8888;
     public static final int HEARTBEAT_TIMEOUT_SECONDS = 10;
-    public static final int RECONNECT_GRACE_SECONDS = 15;
+    public static final int RECONNECT_GRACE_SECONDS = 30;
     public static final int MAX_PLAYERS_PER_ROOM = 4;
     private static final int CLIENT_POOL_SIZE = 32;
     private static final int OUTBOUND_QUEUE_CAPACITY = 256;

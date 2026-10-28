@@ -1,5 +1,6 @@
 package com.bombit.client.game.movement;
 
+import com.bombit.client.ui.game.InputController;
 import com.bombit.server.game.core.GameMap;
 import com.bombit.server.game.model.Direction;
 import com.bombit.server.game.movement.*;
