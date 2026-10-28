@@ -23,6 +23,8 @@ public final class InputController implements AutoCloseable {
     private final Window window;
     private final WindowFocusListener focus;
     private final java.util.function.BooleanSupplier canSample;
+    private final java.util.function.LongSupplier generation;
+    private long seenGeneration;
     private Direction lastDirection = Direction.DOWN;
     public InputController(JComponent component, Window window, PredictionController prediction,
                            Consumer<MovePacketCodec.Input> sender, Consumer<RuntimeException> onError) {
@@ -31,11 +33,17 @@ public final class InputController implements AutoCloseable {
     public InputController(JComponent component, Window window, PredictionController prediction,
                            Consumer<MovePacketCodec.Input> sender, Consumer<RuntimeException> onError,
                            java.util.function.BooleanSupplier canSample) {
+        this(component,window,prediction,sender,onError,canSample,()->0);
+    }
+    public InputController(JComponent component, Window window, PredictionController prediction,
+                           Consumer<MovePacketCodec.Input> sender, Consumer<RuntimeException> onError,
+                           java.util.function.BooleanSupplier canSample,java.util.function.LongSupplier generation) {
         this.canSample=canSample;
+        this.generation=generation;seenGeneration=generation.getAsLong();
         this.component=component; this.window=window; this.prediction=prediction; this.sender=sender;
         for (var direction : Direction.values()) bind(direction);
         focus = new WindowAdapter() { @Override public void windowLostFocus(WindowEvent e) { pressed.clear(); } };
-        window.addWindowFocusListener(focus);
+        if(window!=null)window.addWindowFocusListener(focus);
         timer = new javax.swing.Timer(50, e -> {
             try { sample(); } catch (RuntimeException error) { close(); onError.accept(error); }
         });
@@ -48,6 +56,8 @@ public final class InputController implements AutoCloseable {
             oldBindings.put(stroke,map.get(stroke)); actions.add(action); map.put(stroke,action);
             component.getActionMap().put(action,new AbstractAction() {
                 @Override public void actionPerformed(ActionEvent e) {
+                    refreshGeneration();
+                    if(!canSample.getAsBoolean()){pressed.clear();return;}
                     if (down) pressed.add(direction); else pressed.remove(direction);
                 }
             });
@@ -56,12 +66,19 @@ public final class InputController implements AutoCloseable {
     public void start() { timer.start(); }
     /** Gửi cả mẫu đứng yên để ACK luôn gắn với số bước mô phỏng xác định. */
     public void sample() {
-        if (!canSample.getAsBoolean()) return;
+        refreshGeneration();
+        // Không giữ phím cũ xuyên qua khoảng recovery rồi phát lại khi mở input.
+        if (!canSample.getAsBoolean()) {pressed.clear();return;}
         for (var direction : pressed) lastDirection=direction;
         sender.accept(prediction.predict(lastDirection,!pressed.isEmpty()));
     }
+    private void refreshGeneration() {
+        long next=generation.getAsLong();
+        // Recovery có thể xong giữa hai mẫu 50 ms; vẫn phải bỏ phím từ connection trước.
+        if(next!=seenGeneration){pressed.clear();seenGeneration=next;}
+    }
     @Override public void close() {
-        timer.stop(); pressed.clear(); window.removeWindowFocusListener(focus);
+        timer.stop(); pressed.clear(); if(window!=null)window.removeWindowFocusListener(focus);
         var map = component.getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW);
         oldBindings.forEach((stroke,old) -> { if (old == null) map.remove(stroke); else map.put(stroke,old); });
         actions.forEach(key -> component.getActionMap().remove(key));

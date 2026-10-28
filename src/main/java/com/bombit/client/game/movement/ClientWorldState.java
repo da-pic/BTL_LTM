@@ -81,6 +81,8 @@ public final class ClientWorldState {
     private Result reject() { needsFullState = true; return Result.NEED_FULL_STATE; }
     // Mục đích: Cho tầng client biết cần lấy full; không đồng nghĩa một request mạng đã được gửi.
     public boolean needsFullState() { return needsFullState; }
+    /** Giữ ảnh cũ để render nhưng bắt buộc full trước khi nhận delta sau reconnect. */
+    public void requireFullState() { needsFullState=true; }
     // Mục đích: Đọc Tick để quan sát trạng thái; phương thức không cập nhật mô phỏng.
     public long getTick() { return tick; }
     // Mục đích: Đọc Width để quan sát trạng thái; phương thức không cập nhật mô phỏng.

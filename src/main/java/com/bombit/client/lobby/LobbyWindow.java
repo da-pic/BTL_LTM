@@ -15,6 +15,7 @@ public final class LobbyWindow extends JFrame {
             refresh=new JButton("Refresh"), ready=new JButton("Ready"), start=new JButton("Start"),
             leave=new JButton("Leave room"), end=new JButton("End round");
     private final JTextField roomName=new JTextField("My room",12), message=new JTextField(28);
+    private final JButton send=new JButton("Send");
     private final JSpinner capacity=new JSpinner(new SpinnerNumberModel(4,2,4,1));
     private final DefaultListModel<String> roomRows=new DefaultListModel<>();
     private final JList<String> roomList=new JList<>(roomRows);
@@ -40,7 +41,7 @@ public final class LobbyWindow extends JFrame {
         JPanel actions=new JPanel(); for(JButton b:new JButton[]{ready,start,leave,end}) actions.add(b);detail.add(actions,BorderLayout.SOUTH);
         JPanel middle=new JPanel(new GridLayout(1,2));middle.add(browse);middle.add(detail);
         JPanel chatPanel=new JPanel(new BorderLayout());chatPanel.add(new JScrollPane(chat));
-        JButton send=new JButton("Send");JPanel compose=new JPanel();compose.add(message);compose.add(send);chatPanel.add(compose,BorderLayout.SOUTH);
+        JPanel compose=new JPanel();compose.add(message);compose.add(send);chatPanel.add(compose,BorderLayout.SOUTH);
         tabs.addTab("Chat",chatPanel);tabs.addTab("Kết quả",results);
         JPanel body=new JPanel(new BorderLayout());body.add(middle,BorderLayout.NORTH);body.add(tabs);
         add(connection,BorderLayout.NORTH);add(body);add(status,BorderLayout.SOUTH);
@@ -62,21 +63,41 @@ public final class LobbyWindow extends JFrame {
     private void connect() {
         int number;try { number=Integer.parseInt(port.getText());if(number<1||number>65535) throw new NumberFormatException(); }
         catch(NumberFormatException invalid) { status.setText("Port must be 1..65535");return; }
-        if(client!=null) client.close();connect.setEnabled(false);room=null;
+        if(client!=null) client.close();connected=false;connect.setEnabled(false);room=null;
         String address=host.getText().strip(),username=name.getText();
+        var owner=new java.util.concurrent.atomic.AtomicReference<DemoClientConnection>();
         DemoClientConnection next=new DemoClientConnection(SwingUtilities::invokeLater,movement -> {
+            if(client!=owner.get())return;
             resultNames.clear();results.clear();tabs.setSelectedIndex(0);
             if(room!=null)for(var p:room.players())client.context().playerId(p.playerId()).ifPresent(id->resultNames.put(id,p.username()));
             if(game!=null) game.disposeGame();
             game=new MovementGameWindow(movement,client.localId(),() -> {
-                game=null;if(isHost()) endRound();else command(PacketType.LEAVE_ROOM,Map.of());
+                game=null;
+                if(client.isReconnecting()){client.close();return;}
+                if(isHost()) endRound();else command(PacketType.LEAVE_ROOM,Map.of());
             });game.setVisible(true);
-        },text -> { connected=true;status.setText(text);updateButtons(); },error -> {
+        },text -> {if(client!=owner.get())return;status.setText(text);updateButtons();},error -> {
+            if(client!=owner.get())return;
             connected=false;connect.setEnabled(true);room=null;
             if(game!=null) { game.disposeGame();game=null; }
             status.setText("Disconnected: "+error.getMessage());updateButtons();
         });
+        owner.set(next);
+        // GUI lobby chính thức bật recovery. M1 --demo vẫn giữ policy không reconnect của server M1.
+        next.setAutoReconnect(true);
         client=next;next.setLobbyListener(this::packet);
+        next.setRecoveryStateListener(state->{
+            if(client!=next)return; // Callback của lần Connect trước không sửa UI của lần mới.
+            connected=state!=DemoClientConnection.RecoveryState.CLOSED&&state!=DemoClientConnection.RecoveryState.CONNECTING;
+            if(state==DemoClientConnection.RecoveryState.CLOSED) {
+                connect.setEnabled(true);room=null;
+                if(game!=null){game.disposeGame();game=null;}
+            } else if(game!=null) {
+                game.setRecoveryStatus(next.isReconnecting()?"Đang phục hồi phiên — tạm khóa di chuyển và đặt bom...":null);
+            }
+            updateButtons();
+        });
+        updateButtons();
         Thread worker=new Thread(() -> { try { next.connect(address,number,username); } catch(Exception ignored) { } },"Lobby-Connect");
         worker.setDaemon(true);worker.start();
     }
@@ -106,25 +127,26 @@ public final class LobbyWindow extends JFrame {
     }
     private void sendChat() { if(room!=null&&!message.getText().isBlank()) { command(PacketType.CHAT,Map.of("message",message.getText()));message.setText(""); } }
     private void command(short type,Map<String,?> body) {
-        if(client==null||!connected) return;
+        if(client==null||!connected||client.isReconnecting()||client.isClosed()) return;
         var fields=new LinkedHashMap<String,Object>(body);
         if(room!=null&&(type==PacketType.READY||type==PacketType.START_GAME||type==PacketType.CHAT||type==PacketType.LEAVE_ROOM)) fields.put("roomId",room.roomId());
         if(type==PacketType.CREATE_ROOM) fields.put("mode","STANDARD");
         client.send(LobbyPacketCodec.packet(type,fields));
     }
     private void endRound() {
-        if(client==null||client.context()==null) return;
+        if(client==null||client.context()==null||client.isReconnecting()||client.isClosed()) return;
         try { client.send(MatchEnvelopeCodec.wrap(client.context().matchId(),new Packet(PacketType.END_GAME,"{}"))); }
         catch(java.io.IOException error) { status.setText(error.getMessage()); }
     }
     private boolean isHost() { return room!=null&&client!=null&&room.hostId().equals(client.sessionId()); }
     private boolean isReady() { return room!=null&&room.players().stream().anyMatch(p -> p.playerId().equals(client.sessionId())&&p.state().equals("READY")); }
     private void updateButtons() {
-        boolean waiting=connected&&room!=null&&room.state().equals("WAITING");
-        create.setEnabled(connected&&room==null);join.setEnabled(connected&&room==null);refresh.setEnabled(connected);
+        boolean usable=connected&&client!=null&&!client.isReconnecting()&&!client.isClosed();
+        boolean waiting=usable&&room!=null&&room.state().equals("WAITING");
+        create.setEnabled(usable&&room==null);join.setEnabled(usable&&room==null);refresh.setEnabled(usable);
         ready.setEnabled(waiting);ready.setText(isReady()?"Unready":"Ready");
-        start.setEnabled(waiting&&isHost());leave.setEnabled(connected&&room!=null);
-        end.setEnabled(connected&&room!=null&&isHost()&&!waiting);message.setEnabled(connected&&room!=null);
+        start.setEnabled(waiting&&isHost());leave.setEnabled(usable&&room!=null);
+        end.setEnabled(usable&&room!=null&&isHost()&&!waiting);message.setEnabled(usable&&room!=null);send.setEnabled(usable&&room!=null);
         host.setEnabled(!connected);port.setEnabled(!connected);name.setEnabled(!connected);
     }
 }

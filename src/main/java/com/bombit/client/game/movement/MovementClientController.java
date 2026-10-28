@@ -35,6 +35,31 @@ public final class MovementClientController implements AutoCloseable {
     private final com.bombit.client.game.bomb.BombScene bombs=new com.bombit.client.game.bomb.BombScene();
     private long plantRequest;
     private int respawns;
+    private volatile boolean recoverySuspended;
+    private boolean resetAfterRecovery;
+    private long lastAppliedFullTick=-1;
+    private final java.util.concurrent.atomic.AtomicLong inputGeneration=new java.util.concurrent.atomic.AtomicLong();
+    private volatile Consumer<Throwable> transportErrors;
+
+    /** Chỉ lỗi gửi mạng dùng recovery; lỗi payload/world vẫn fail và đóng controller. */
+    public void setTransportErrorHandler(Consumer<Throwable> handler) { transportErrors=handler; }
+    /** Reader được gọi hàm này: khóa input ngay và bỏ task chưa gửi của connection cũ. */
+    public void suspendForRecovery() {
+        recoverySuspended=true;inputGeneration.incrementAndGet();sender.getQueue().clear();
+    }
+    /** Chỉ gọi trên UI: giữ world để vẽ, bỏ prediction pending và đệm nội suy cũ. */
+    public void prepareRecoveryOnUi() {
+        resetAfterRecovery=true;world.requireFullState();interpolation.clear();
+        var local=world.getPlayers().get(localId);
+        if(prediction!=null&&local!=null)prediction.resetAfterRecovery(local);
+    }
+    public void resumeAfterRecovery() {
+        if(closed||resetAfterRecovery||world.needsFullState())throw new IllegalStateException("Recovery full not applied");
+        recoverySuspended=false;
+    }
+    public boolean isRecovering() { return recoverySuspended; }
+    public long inputGeneration() { return inputGeneration.get(); }
+    public long lastAppliedFullTick() { return lastAppliedFullTick; }
 
     public MovementClientController(ClientNetwork network,int localId,Executor ui,
                                     Runnable resync,Consumer<Throwable> errors) {
@@ -80,6 +105,7 @@ public final class MovementClientController implements AutoCloseable {
     }
     private void apply(GameStateUpdate update) {
         try {
+            if(resetAfterRecovery&&!update.isFullState())return;
             var result=world.apply(update);
             if(result == ClientWorldState.Result.NEED_FULL_STATE) {
                 if(!resyncPending) { resyncPending=true; sender.execute(resync); } return;
@@ -94,23 +120,29 @@ public final class MovementClientController implements AutoCloseable {
                 prediction=new PredictionController(map,player);
                 reconciliation=new ReconciliationController(prediction);
             }
+            if(resetAfterRecovery) {
+                prediction.resetAfterRecovery(player);interpolation.clear();resetAfterRecovery=false;
+            }
             var frame=world.getMatchFrame();
             if(frame!=null){
                 var stats=frame.players().stream().filter(p->p.playerId()==localId).findFirst().orElseThrow();
                 if(stats.respawns()!=respawns){prediction.respawn();respawns=stats.respawns();}
             }
             reconciliation.reconcile(world,player); interpolation.record(world);
+            if(update.isFullState())lastAppliedFullTick=update.getTick();
         } catch (RuntimeException e) { fail(e); }
     }
     /** InputController gọi sau prediction; chỉ enqueue, không chặn UI bằng socket write. */
     public void send(MovePacketCodec.Input input) {
         if(closed) throw new IllegalStateException("Movement client closed");
+        if(recoverySuspended)return;
+        long generation=inputGeneration.get();
         enqueue(() -> {
-            try { if(!closed) {
+            try { if(!closed&&!recoverySuspended&&generation==inputGeneration.get()) {
                 Packet packet=MovePacketCodec.encode(input);
                 network.send(matchId==null?packet:MatchEnvelopeCodec.wrap(matchId,packet));
             } }
-            catch(Exception e) { fail(e); }
+            catch(Exception e) { transportFailed(e,generation); }
         });
     }
     public com.bombit.client.game.bomb.BombScene bombs() { return bombs; }
@@ -119,10 +151,17 @@ public final class MovementClientController implements AutoCloseable {
         var local=world.getPlayers().get(localId);
         if(!isInputReady()||!bombs.enabled()||local==null||!local.isAlive()||matchId==null) return;
         Packet command=BombPacketCodec.plant(++plantRequest);
+        long generation=inputGeneration.get();
         enqueue(()->{
-            try { if(!closed) network.send(MatchEnvelopeCodec.wrap(matchId,command)); }
-            catch(Exception e) { fail(e); }
+            try { if(!closed&&!recoverySuspended&&generation==inputGeneration.get())network.send(MatchEnvelopeCodec.wrap(matchId,command)); }
+            catch(Exception e) { transportFailed(e,generation); }
         });
+    }
+    private void transportFailed(Throwable error,long generation) {
+        if(closed||generation!=inputGeneration.get())return;
+        var handler=transportErrors;
+        if(handler==null) {fail(error);return;}
+        suspendForRecovery();handler.accept(error);
     }
     private void enqueue(Runnable task){
         try{sender.execute(task);}catch(RejectedExecutionException full){if(!closed)fail(full);}
@@ -139,7 +178,7 @@ public final class MovementClientController implements AutoCloseable {
     }
     public ClientWorldState world() { return world; }
     public PredictionController prediction() { return prediction; }
-    public boolean isInputReady() { return !closed && prediction!=null && !world.needsFullState()
+    public boolean isInputReady() { return !closed && !recoverySuspended && prediction!=null && !world.needsFullState()
             && world.getMatchState()==com.bombit.server.game.core.GameState.MatchState.RUNNING; }
     public boolean isClosed() { return closed; }
     public InterpolationController interpolation() { return interpolation; }

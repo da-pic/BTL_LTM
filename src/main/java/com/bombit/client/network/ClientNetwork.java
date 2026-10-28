@@ -45,10 +45,17 @@ public final class ClientNetwork implements AutoCloseable {
     private volatile ScheduledExecutorService writeGuard;
     private volatile long writingSince;
     private final long writeTimeoutNanos;
+    private final java.util.function.Supplier<Socket> socketFactory;
+    private boolean connecting;
     public ClientNetwork(){this(5000);}
     public ClientNetwork(long writeTimeoutMillis){
+        this(writeTimeoutMillis,Socket::new);
+    }
+    // Factory package-private để test việc cancel connect mà không cần mạng ngoài/đợi DNS.
+    ClientNetwork(long writeTimeoutMillis,java.util.function.Supplier<Socket> socketFactory){
         if(writeTimeoutMillis<=0)throw new IllegalArgumentException("Invalid write deadline");
         writeTimeoutNanos=TimeUnit.MILLISECONDS.toNanos(writeTimeoutMillis);
+        this.socketFactory=Objects.requireNonNull(socketFactory);
     }
 
     /** Listener-only clients opt out of the duplicate pull queue; receive() stays enabled by default. */
@@ -58,17 +65,28 @@ public final class ClientNetwork implements AutoCloseable {
     }
 
     /** Tạo kết nối mới; timeout giúp tránh treo vô hạn khi host không phản hồi. */
-    public synchronized void connect(String host, int port) throws IOException {
+    public void connect(String host, int port) throws IOException {
+        connect(host,port,5_000);
+    }
+    /** Recovery truyền timeout còn lại để mỗi lần connect không chiếm hết ngân sách thử lại. */
+    public void connect(String host, int port, int timeoutMillis) throws IOException {
         Objects.requireNonNull(host, "host");
+        if(timeoutMillis<=0)throw new IllegalArgumentException("Invalid connect timeout");
         if (port < 1 || port > 65535) throw new IllegalArgumentException("Port phải nằm trong 1..65535");
-        if (running.get()) throw new IllegalStateException("Client đã được kết nối");
-        if(listenerThread!=null&&listenerThread.isAlive())throw new IllegalStateException("Previous reader is still stopping");
-        Socket candidate = new Socket();
+        Socket candidate;
+        synchronized(this) {
+            if (running.get()||connecting) throw new IllegalStateException("Client đã được kết nối hoặc đang kết nối");
+            if(listenerThread!=null&&listenerThread.isAlive())throw new IllegalStateException("Previous reader is still stopping");
+            candidate=socketFactory.get();socket=candidate;connecting=true;
+        }
         try {
-            candidate.connect(new InetSocketAddress(host, port), 5_000);
+            // Không giữ monitor lúc resolve/connect: close() có thể đóng candidate và UI không bị chờ.
+            candidate.connect(new InetSocketAddress(host, port), timeoutMillis);
             candidate.setTcpNoDelay(true);
+            synchronized(this) {
+            if(socket!=candidate||candidate.isClosed())throw new SocketException("Connect cancelled");
             clearPullQueue(); // Không để packet từ phiên trước lọt sang phiên mới.
-            socket = candidate;
+            connecting=false;writingSince=0;
             running.set(true);
             var guard=Executors.newSingleThreadScheduledExecutor(r->{var t=new Thread(r,"Client-Write-Watchdog");t.setDaemon(true);return t;});
             writeGuard=guard;
@@ -81,7 +99,9 @@ public final class ClientNetwork implements AutoCloseable {
             reader.setDaemon(true); // Listener không giữ ứng dụng sống khi caller quên disconnect.
             listenerThread = reader;
             reader.start();
+            }
         } catch (IOException | RuntimeException e) {
+            synchronized(this){if(socket==candidate){socket=null;connecting=false;}}
             try { candidate.close(); } catch (IOException closeError) { e.addSuppressed(closeError); }
             throw e;
         }
@@ -220,7 +240,8 @@ public final class ClientNetwork implements AutoCloseable {
     /** Đóng socket sẽ đánh thức thread đọc đang block và kết thúc listener. */
     public void disconnect() {
         Socket active;Thread reader;ScheduledExecutorService guard;
-        synchronized(this){running.set(false);active=socket;socket=null;reader=listenerThread;guard=writeGuard;writeGuard=null;}
+        synchronized(this){running.set(false);connecting=false;writingSince=0;
+            active=socket;socket=null;reader=listenerThread;guard=writeGuard;writeGuard=null;}
         if (active != null) {
             try { active.close(); }
             catch (IOException e) { System.err.println("[ClientNetwork] Lỗi đóng socket: " + e.getMessage()); }

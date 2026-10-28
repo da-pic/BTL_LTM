@@ -74,6 +74,12 @@ public final class PredictionController {
                 p.direction(),p.isMoving(),p.isAlive(),acknowledged);
     }
     public int pendingCount() { return pending.size(); }
+    /** Bỏ input chưa ACK sau mất mạng; không phát lại thao tác offline.
+     * Giữ sequence tăng đơn điệu và trở về ảnh authoritative trước khi mở input.
+     */
+    public void resetAfterRecovery(GameStateUpdate.PlayerData authoritative) {
+        pending.clear();reconcile(authoritative);
+    }
     /** Discard pre-respawn prediction without reusing any input sequence numbers. */
     public void respawn(){pending.clear();}
 }

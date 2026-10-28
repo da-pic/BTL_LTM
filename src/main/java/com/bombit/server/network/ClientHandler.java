@@ -59,24 +59,27 @@ public final class ClientHandler implements Runnable {
                     } catch (RuntimeException invalid) {
                         error("INVALID_PACKET"); hardDrop=true; drain=true; break;
                     }
+                    // Preflight giữ socket tạm sống để trả ERROR cho token sai/hết hạn.
+                    // reconnect() vẫn kiểm tra nguyên tử lần nữa, không tin kết quả preflight.
                     if (!sessions.canReconnect(req.playerId(), req.reconnectToken())) {
                         error("RECONNECT_REJECTED"); hardDrop=true; drain=true; break;
                     }
                     String provisionalId = session.getPlayerId();
-                    connections.releasePreservingSocket(provisionalId);
-                    sessions.discardProvisional(provisionalId);
-                    var newWriter = new java.util.concurrent.atomic.AtomicReference<SessionWriter>();
                     boolean ok = sessions.reconnect(req.playerId(), req.reconnectToken(), socket, resumed -> {
+                        // Chỉ bỏ phiên tạm SAU khi SessionManager đã giữ quyền reconnect.
+                        // Nếu token/deadline sai, writer tạm vẫn gửi được ERROR cho client.
+                        connections.releasePreservingSocket(provisionalId);
+                        if (!sessions.discardProvisional(provisionalId))
+                            throw new IllegalStateException("Provisional session no longer owned");
                         var w = connections.open(resumed);
-                        newWriter.set(w);
+                        this.session = resumed;
+                        this.writer = w;
                         w.send(resumed, OutboundMessage.fromPacket(
                                 SessionPacketCodec.acknowledgement(resumed.getPlayerId(), resumed.getReconnectToken())));
                     });
-                    if (!ok || newWriter.get() == null) {
+                    if (!ok) {
                         error("RECONNECT_REJECTED"); hardDrop=true; drain=true; break;
                     }
-                    this.session = sessions.find(req.playerId()).orElseThrow();
-                    this.writer = newWriter.get();
                     continue;
                 }
                 try {
@@ -101,8 +104,8 @@ public final class ClientHandler implements Runnable {
         } finally {
             if (drain) writer.finishAndAwait();
             if (session.getSocket() == socket) {
-                if (hardDrop || session.getState() == SessionState.CONNECTED) sessions.hardDrop(session.getPlayerId());
-                else sessions.handleUnexpectedDisconnect(session.getPlayerId());
+                if (hardDrop || session.getState() == SessionState.CONNECTED) sessions.hardDrop(session.getPlayerId(), socket);
+                else sessions.handleUnexpectedDisconnect(session.getPlayerId(), socket);
             }
             connections.release(session.getPlayerId(), socket);
             try { socket.close(); } catch (IOException ignored) { }

@@ -18,6 +18,7 @@ public final class MovementGameWindow extends JFrame {
     private final Timer render;
     private final JLabel status=new JLabel("Đang chờ full snapshot...");
     private final JLabel cellStatus=new JLabel("Viền xanh: ô đang đứng — Space: đặt bom theo ô");
+    private String recoveryStatus;
     public MovementGameWindow(ClientNetwork network,int localId,Runnable resync,Runnable onClose) {
         this(null,network,localId,resync,onClose);
     }
@@ -77,7 +78,7 @@ public final class MovementGameWindow extends JFrame {
         render=new Timer(16,e -> {
             if(input==null && movement.isInputReady()) {
                 input=new InputController(getRootPane(),this,movement.prediction(),movement::send,
-                        error -> status.setText("Input lỗi: "+error.getMessage()),movement::isInputReady); input.start();
+                        error -> status.setText("Input lỗi: "+error.getMessage()),movement::isInputReady,movement::inputGeneration); input.start();
                 status.setText(movement.bombs().enabled()?"Phím mũi tên để di chuyển — Space để đặt bom":"Phím mũi tên để di chuyển");
             }
             // Chết thì không tiếp tục sinh input chưa ACK; renderer vẫn nhận snapshot của người còn lại.
@@ -88,7 +89,9 @@ public final class MovementGameWindow extends JFrame {
                 cellStatus.setText("Ô đang đứng: cột "+(cell.x()+1)+", hàng "+(cell.y()+1)+" | Viền xanh | Space: đặt bom theo ô");
             }
             var frame=movement.world().getMatchFrame();
-            if(local!=null&&local.isAlive()&&frame!=null){
+            if(recoveryStatus!=null||movement.isRecovering()) {
+                status.setText(recoveryStatus!=null?recoveryStatus:"Đang phục hồi phiên — chờ full state...");
+            } else if(local!=null&&local.isAlive()&&frame!=null){
                 var stats=frame.players().stream().filter(p->p.playerId()==localId).findFirst().orElse(null);
                 if(stats!=null)status.setText("Time "+frame.remainingSeconds()+"s | Lives "+stats.lives()+" | Shield "+(stats.shield()?"ON":"OFF")+" | Bombs "+stats.bombLimit()+" | Range "+stats.range()+" | Speed "+(int)local.getSpeed()+" | Space: bomb");
             }
@@ -104,6 +107,7 @@ public final class MovementGameWindow extends JFrame {
         var held=new boolean[1];
         getRootPane().getActionMap().put("plant-bomb",new AbstractAction(){
             public void actionPerformed(ActionEvent e){if(!held[0]) {
+                if(!movement.isInputReady())return;
                 held[0]=true;
                 try { movement.plantBomb(); } catch(RuntimeException error) { showError(error.getMessage()); }
             }}
@@ -123,6 +127,8 @@ public final class MovementGameWindow extends JFrame {
     public void disposeGame() {
         render.stop(); if(input!=null) input.close(); movement.close(); dispose();
     }
+    /** EDT: giữ cửa sổ/world cũ, chỉ đổi trạng thái hiển thị; không đóng controller khi mất mạng. */
+    public void setRecoveryStatus(String message) {recoveryStatus=message;if(message!=null)status.setText(message);}
     public void showError(String message) {
         if(input!=null) input.close();
         render.stop();

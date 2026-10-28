@@ -49,10 +49,11 @@ public final class HeartbeatManager implements AutoCloseable {
 
     private void sweep() {
         for (Session session : sessionManager.snapshot().values()) {
+            // Chụp socket trước khi đọc heartbeat: sweep cũ không được đóng socket sau reconnect.
+            var expectedSocket = session.getSocket();
             try{if (session.getState() != SessionState.DISCONNECTED && session.getState()!=SessionState.CLOSED
                     && session.isHeartbeatExpired(timeoutNanos)) {
-                if(session.getState()==SessionState.CONNECTED)sessionManager.hardDrop(session.getPlayerId());
-                else sessionManager.handleUnexpectedDisconnect(session.getPlayerId());
+                sessionManager.handleHeartbeatTimeout(session.getPlayerId(),expectedSocket,timeoutNanos);
             }}catch(RuntimeException e){failure.compareAndSet(null,e);}
         }
     }

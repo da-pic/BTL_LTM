@@ -88,8 +88,9 @@ public final class Server implements AutoCloseable {
         this.sessionManager = new SessionManager(gameEventSink, RECONNECT_GRACE_SECONDS);
         connectionManager.setFailureHandler((session, socket) -> {
             if (session.getSocket() == socket) {
-                if (session.getState() == SessionState.CONNECTED) sessionManager.hardDrop(session.getPlayerId());
-                else sessionManager.handleUnexpectedDisconnect(session.getPlayerId());
+                // Kiểm tra ownership lần nữa trong SessionManager; if bên ngoài có thể đã cũ.
+                if (session.getState() == SessionState.CONNECTED) sessionManager.hardDrop(session.getPlayerId(), socket);
+                else sessionManager.handleUnexpectedDisconnect(session.getPlayerId(), socket);
             }
         });
         SessionHandlers.register(router, sessionManager, broadcastSender, session -> connected.accept(session));

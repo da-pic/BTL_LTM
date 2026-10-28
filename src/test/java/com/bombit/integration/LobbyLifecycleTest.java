@@ -164,7 +164,8 @@ class LobbyLifecycleTest {
                 // Server emits full state sync or snapshot to sync client A
                 Packet syncOrSnap = netA2.receive(Duration.ofSeconds(5));
                 assertNotNull(syncOrSnap);
-                assertTrue(syncOrSnap.getType() == PacketType.FULL_STATE_SYNC || syncOrSnap.getType() == PacketType.GAME_SNAPSHOT);
+                assertEquals(PacketType.FULL_STATE_SYNC,syncOrSnap.getType());
+                assertTrue(snapshot(syncOrSnap,matchA).isFullState());
 
                 // Client A sends movement command after reconnecting
                 netA2.send(MatchEnvelopeCodec.wrap(matchA.matchId(),
@@ -253,11 +254,15 @@ class LobbyLifecycleTest {
 
             // Drop client A's active socket on server side (simulating sudden Wi-Fi loss)
             var sessionA = f.server.transport().getSessionManager().find(a.sessionId()).orElseThrow();
+            long beforeDropTick=ui.submit(()->a.movement().world().getTick()).get();
             sessionA.closeSocket();
 
             // Client A automatically detects drop, reconnects with same token, and gets full state sync!
             waitFor(() -> statusA.stream().anyMatch(s -> s.contains("Reconnected")));
-            actorAwait(ui, () -> a.movement() != null && a.movement().isInputReady());
+            // ACK chỉ nhận lại identity, chưa phải xác nhận full đã tới.
+            // Server chặn input tới khi enqueue full; client hiện còn phải chờ replica mới ở đây.
+            actorAwait(ui, () -> a.movement() != null && a.movement().isInputReady()
+                    && a.movement().world().getTick()>beforeDropTick);
 
             // Movement still functions after reconnect
             ui.submit(() -> a.movement().send(a.movement().prediction().predict(Direction.RIGHT, true))).get();
@@ -269,6 +274,133 @@ class LobbyLifecycleTest {
             ui.shutdown();
             assertTrue(ui.awaitTermination(2,TimeUnit.SECONDS));
         }
+    }
+    @Test void halfOpenTakeoverKeepsIdentityAndRejectsWrongTokenWithoutDroppingOwner() throws Exception {
+        try(var f=new Fixture();var a=new Peer(f,"A");var b=new Peer(f,"B");
+            var denied=new ClientNetwork();var recovered=new ClientNetwork()) {
+            f.server.setSeamlessRecovery(true);
+            String room=create(a,2);join(b,room);ready(b);a.command(PacketType.START_GAME);
+            var match=DemoPacketCodec.decodeStarted(a.take(PacketType.GAME_STARTED));b.take(PacketType.GAME_STARTED);
+            assertFull(a,match);assertFull(b,match);
+            var session=f.server.transport().getSessionManager().find(a.id).orElseThrow();
+            var oldSocket=session.getSocket();
+            denied.connect("127.0.0.1",f.server.port());
+            denied.send(SessionPacketCodec.reconnectRequest(a.id,UUID.randomUUID().toString()));
+            var error=denied.receive(Duration.ofSeconds(3));assertNotNull(error);
+            assertEquals("RECONNECT_REJECTED",SessionPacketCodec.errorCode(error));
+            assertSame(oldSocket,session.getSocket());assertEquals(SessionState.PLAYING,session.getState());
+            // Socket gốc còn sống: server phải hỗ trợ takeover, không đòi chờ heartbeat timeout.
+            recovered.connect("127.0.0.1",f.server.port());
+            recovered.send(SessionPacketCodec.reconnectRequest(a.id,a.token));
+            var ack=recovered.receive(Duration.ofSeconds(3));assertNotNull(ack);
+            assertEquals(a.id,SessionPacketCodec.decodeAcknowledgement(ack).playerId());
+            var started=recovered.receive(Duration.ofSeconds(3));assertNotNull(started);
+            assertEquals(match.matchId(),DemoPacketCodec.decodeStarted(started).matchId());
+            var full=recovered.receive(Duration.ofSeconds(3));assertNotNull(full);
+            assertEquals(PacketType.FULL_STATE_SYNC,full.getType());assertTrue(snapshot(full,match).isFullState());
+            assertNotSame(oldSocket,session.getSocket());assertTrue(oldSocket.isClosed());
+            int player=match.playerId(a.id).orElseThrow();
+            recovered.send(MatchEnvelopeCodec.wrap(match.matchId(),MovePacketCodec.encode(new MovePacketCodec.Input(1,Direction.RIGHT,true))));
+            b.until(p->(p.getType()==PacketType.GAME_SNAPSHOT||p.getType()==PacketType.FULL_STATE_SYNC)
+                    &&java.util.stream.Stream.concat(snapshot(p,match).getPlayerChanges().stream(),snapshot(p,match).getPlayers().stream())
+                    .anyMatch(change->change.getId()==player&&change.getLastProcessedInput()>=1));
+            waitFor(()->f.server.transport().getSessionManager().snapshot().size()==2
+                    &&f.server.transport().getConnectionManager().count()==2);
+            assertEquals(0,f.server.transport().getSessionManager().pendingDisconnectTimers());
+        }
+    }
+    @Test void fullCommandQueueAbortsInsteadOfSilentlyLosingFreeze() throws Exception {
+        var entered=new CountDownLatch(1);var release=new CountDownLatch(1);
+        var manager=new GameRuntimeManager(id->DemoGameServer.map(),(id,state)->new GameplayExtension(){
+            public void processCommand(GameCommand command) { }
+            public void update(long now) { }
+            public void onStart(){
+                entered.countDown();
+                try {release.await();}catch(InterruptedException stopping){Thread.currentThread().interrupt();}
+            }
+        });
+        try(var f=new Fixture(manager);var a=new Peer(f,"A");var b=new Peer(f,"B")) {
+            f.server.setSeamlessRecovery(true);
+            String room=create(a,2);join(b,room);ready(b);a.command(PacketType.START_GAME);
+            var match=DemoPacketCodec.decodeStarted(a.take(PacketType.GAME_STARTED));b.take(PacketType.GAME_STARTED);
+            assertTrue(entered.await(2,TimeUnit.SECONDS));var game=manager.findGame(room).orElseThrow();
+            int player=match.playerId(a.id).orElseThrow();
+            for(int n=0;n<4096;n++)assertTrue(game.submit(new MoveCommand(player,Direction.RIGHT,n+1)));
+            assertFalse(game.submit(new MoveCommand(player,Direction.RIGHT,4097)));
+            a.close();
+            waitFor(()->!game.isRunning());release.countDown();
+            var result=GameplayPacketCodec.decodeResult(MatchEnvelopeCodec.unwrap(b.take(PacketType.GAME_OVER),match.matchId()));
+            assertEquals(com.bombit.common.dto.MatchResult.Reason.ABORTED,result.reason());
+            waitFor(()->f.server.activeMatchCount()==0&&f.server.snapshotWorkerCount()==0);
+            assertFalse(game.isThreadAlive());assertTrue(game.rejectedCommandCount()>=2);
+        } finally {release.countDown();}
+    }
+    @Test void recoveryRejectsInputUntilFreshFullIsQueuedThenAcceptsIt() throws Exception {
+        var block=new AtomicBoolean();var entered=new CountDownLatch(1);var release=new CountDownLatch(1);
+        var manager=new GameRuntimeManager(id->DemoGameServer.map(),(id,state)->new GameplayExtension(){
+            public void processCommand(GameCommand command) { }
+            public void update(long now) {
+                if(block.getAndSet(false)) {
+                    entered.countDown();
+                    try {release.await();}catch(InterruptedException e){Thread.currentThread().interrupt();}
+                }
+            }
+        });
+        try(var f=new Fixture(manager);var a=new Peer(f,"A");var b=new Peer(f,"B");var recovered=new ClientNetwork()) {
+            f.server.setSeamlessRecovery(true);
+            String room=create(a,2);join(b,room);ready(b);a.command(PacketType.START_GAME);
+            var match=DemoPacketCodec.decodeStarted(a.take(PacketType.GAME_STARTED));b.take(PacketType.GAME_STARTED);
+            assertFull(a,match);assertFull(b,match);
+            a.close();block.set(true);assertTrue(entered.await(2,TimeUnit.SECONDS));
+            recovered.connect("127.0.0.1",f.server.port());
+            recovered.send(SessionPacketCodec.reconnectRequest(a.id,a.token));
+            var ack=recovered.receive(Duration.ofSeconds(3));assertNotNull(ack);
+            assertEquals(a.id,SessionPacketCodec.decodeAcknowledgement(ack).playerId());
+            var started=recovered.receive(Duration.ofSeconds(3));assertNotNull(started);
+            assertEquals(PacketType.GAME_STARTED,started.getType());
+            recovered.send(MatchEnvelopeCodec.wrap(match.matchId(),MovePacketCodec.encode(new MovePacketCodec.Input(99,Direction.RIGHT,true))));
+            var error=recovered.receive(Duration.ofSeconds(3));assertNotNull(error);
+            assertEquals("NOT_READY",SessionPacketCodec.errorCode(error));
+            release.countDown();
+            var full=recovered.receive(Duration.ofSeconds(3));assertNotNull(full);
+            assertEquals(PacketType.FULL_STATE_SYNC,full.getType());var state=snapshot(full,match);assertTrue(state.isFullState());
+            int player=match.playerId(a.id).orElseThrow();
+            assertEquals(0,state.getPlayers().stream().filter(p->p.getId()==player).findFirst().orElseThrow().getLastProcessedInput());
+            recovered.send(MatchEnvelopeCodec.wrap(match.matchId(),MovePacketCodec.encode(new MovePacketCodec.Input(100,Direction.RIGHT,true))));
+            b.until(p->(p.getType()==PacketType.GAME_SNAPSHOT||p.getType()==PacketType.FULL_STATE_SYNC)
+                    &&java.util.stream.Stream.concat(snapshot(p,match).getPlayerChanges().stream(),snapshot(p,match).getPlayers().stream())
+                    .anyMatch(pl->pl.getId()==player&&pl.getLastProcessedInput()==100));
+        } finally {release.countDown();}
+    }
+    @Test void fullCommandQueueDuringResumeAbortsAndClosesRecoveringSession() throws Exception {
+        var disconnected=new CountDownLatch(1);var entered=new CountDownLatch(1);var release=new CountDownLatch(1);
+        var blocked=new AtomicBoolean();
+        var manager=new GameRuntimeManager(id->DemoGameServer.map(),(id,state)->new GameplayExtension(){
+            public void processCommand(GameCommand command) {
+                if(command instanceof PlayerDisconnectedCommand)disconnected.countDown();
+            }
+            public void update(long now) {
+                if(disconnected.getCount()==0&&blocked.compareAndSet(false,true)) {
+                    entered.countDown();
+                    try{release.await();}catch(InterruptedException e){Thread.currentThread().interrupt();}
+                }
+            }
+        });
+        try(var f=new Fixture(manager);var a=new Peer(f,"A");var b=new Peer(f,"B");var recovered=new ClientNetwork()) {
+            f.server.setSeamlessRecovery(true);
+            String room=create(a,2);join(b,room);ready(b);a.command(PacketType.START_GAME);
+            var match=DemoPacketCodec.decodeStarted(a.take(PacketType.GAME_STARTED));b.take(PacketType.GAME_STARTED);
+            assertFull(a,match);assertFull(b,match);a.close();assertTrue(entered.await(2,TimeUnit.SECONDS));
+            var game=manager.findGame(room).orElseThrow();int playerB=match.playerId(b.id).orElseThrow();
+            for(int n=0;n<4096;n++)assertTrue(game.submit(new MoveCommand(playerB,Direction.LEFT,n+1)));
+            recovered.connect("127.0.0.1",f.server.port());
+            recovered.send(SessionPacketCodec.reconnectRequest(a.id,a.token));
+            var result=GameplayPacketCodec.decodeResult(MatchEnvelopeCodec.unwrap(b.take(PacketType.GAME_OVER),match.matchId()));
+            assertEquals(com.bombit.common.dto.MatchResult.Reason.ABORTED,result.reason());
+            waitFor(()->f.server.transport().getSessionManager().find(a.id).isEmpty());
+            assertFalse(game.isRunning());assertFalse(game.isThreadAlive());assertTrue(game.rejectedCommandCount()>=1);
+            assertEquals(0,f.server.transport().getSessionManager().pendingDisconnectTimers());
+        } finally {release.countDown();}
     }
     private static void actorAwait(ExecutorService ui,BooleanSupplier condition)throws Exception {waitFor(()->{try{return ui.submit(condition::getAsBoolean).get();}catch(Exception e){throw new RuntimeException(e);}});}
     private static void waitFor(BooleanSupplier condition)throws Exception {long end=System.nanoTime()+TimeUnit.SECONDS.toNanos(5);while(!condition.getAsBoolean()){if(System.nanoTime()>end)fail("Condition timed out");Thread.sleep(10);}}

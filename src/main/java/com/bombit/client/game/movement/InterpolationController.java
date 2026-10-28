@@ -12,6 +12,8 @@ public final class InterpolationController {
     private record Frame(long tick, Map<Integer, GameStateUpdate.PlayerData> players) { }
     private final Deque<Frame> frames = new ArrayDeque<>();
     private final Map<Integer,Integer> respawns=new HashMap<>();
+    /** Gọi trên UI: không nội suy qua khoảng mất mạng hoặc bước nhảy vị trí khi phục hồi. */
+    public void clear() { frames.clear();respawns.clear(); }
     public void record(ClientWorldState world) {
         if (!frames.isEmpty() && world.getTick() <= frames.getLast().tick()) return;
         if(world.getMatchFrame()!=null){

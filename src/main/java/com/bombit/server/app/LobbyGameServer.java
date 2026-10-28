@@ -35,6 +35,9 @@ public final class LobbyGameServer implements AutoCloseable, GameEventSink {
         final MatchContext context;
         final List<Session> roster;
         final Set<String> initialized = ConcurrentHashMap.newKeySet();
+        // Giữ thứ tự metadata -> full mới -> delta riêng cho player đang phục hồi.
+        final Set<String> suspended = ConcurrentHashMap.newKeySet();
+        final Map<String,Long> recoveryFullAfter = new ConcurrentHashMap<>();
         final Map<String, Long> windows = new HashMap<>(), resyncs = new HashMap<>();
         final Map<String, Integer> counts = new HashMap<>();
         final Map<String,Long> plantIds=new HashMap<>(),plantWindows=new HashMap<>();
@@ -204,16 +207,27 @@ public final class LobbyGameServer implements AutoCloseable, GameEventSink {
         try {
             while(match.active && match.game.isRunning()) {
                 var update=match.game.pollUpdate(200,TimeUnit.MILLISECONDS); if(update==null) continue;
+                synchronized (this) {
                 Long barrier=match.barrier;
                 boolean sync=update.isFullState() && barrier!=null && update.getTick()>barrier;
                 if(sync) match.barrier=null;
                 Packet p=MatchEnvelopeCodec.wrap(match.context.matchId(),sync?SnapshotPacketCodec.encodeFullSync(update):SnapshotPacketCodec.encode(update));
                 if(!match.active) break;
-                for(Session s:match.roster) if(match.active && send(s,p) && update.isFullState()) match.initialized.add(s.getPlayerId());
+                for(Session s:match.roster) {
+                    String id=s.getPlayerId();
+                    if(!match.active || match.suspended.contains(id)) continue;
+                    Long after=match.recoveryFullAfter.get(id);
+                    // Bỏ delta/full cũ còn nằm trong queue; chỉ mở input sau full vượt barrier.
+                    if(after!=null && (!update.isFullState() || update.getTick()<=after)) continue;
+                    if(send(s,p) && update.isFullState()) {
+                        match.initialized.add(id); match.recoveryFullAfter.remove(id);
+                    }
+                }
                 // Publish notices after their authoritative snapshot, using the same per-session writer queue.
                 for(var notice:update.getGameNotices()) {
                     Packet scoped=MatchEnvelopeCodec.wrap(match.context.matchId(),GameplayPacketCodec.notice(update.getTick(),notice,match.context));
-                    for(Session s:match.roster) if(match.active) send(s,scoped);
+                    for(Session s:match.roster) if(match.active && !match.suspended.contains(s.getPlayerId())
+                            && !match.recoveryFullAfter.containsKey(s.getPlayerId())) send(s,scoped);
                 }
                 if(update.getMatchFrame()!=null&&update.getMatchFrame().result()!=null){
                     synchronized(this){
@@ -221,6 +235,7 @@ public final class LobbyGameServer implements AutoCloseable, GameEventSink {
                         if(room!=null&&matches.get(room.getRoomId())==match){endMatch(room,update.getMatchFrame().result());publishLists();}
                     }
                     break;
+                }
                 }
             }
             if(match.active && match.game.failure()!=null) throw new IllegalStateException("Runtime failed",match.game.failure());
@@ -271,12 +286,19 @@ public final class LobbyGameServer implements AutoCloseable, GameEventSink {
     public boolean isSeamlessRecovery() { return seamlessRecovery; }
 
     @Override public synchronized void onPlayerDisconnected(Session s) {
+        // Callback mất nối có thể chờ khóa lobby trong khi session đã đổi trạng thái.
+        if(s.getState()!=SessionState.DISCONNECTED) return;
         String roomId = s.getRoomId();
         Match match = roomId == null ? null : matches.get(roomId);
         if (seamlessRecovery && match != null && match.active) {
+            match.suspended.add(s.getPlayerId());
+            match.initialized.remove(s.getPlayerId());
             int playerNum = match.context.playerId(s.getPlayerId()).orElse(-1);
-            if (playerNum > 0) {
-                match.game.submit(new PlayerDisconnectedCommand(playerNum, false));
+            if (playerNum <= 0 || !match.game.submit(new PlayerDisconnectedCommand(playerNum, false))) {
+                // Queue hữu hạn: không giả vờ freeze thành công khi command bị từ chối.
+                // Dừng lượt theo ABORTED thay vì tiếp tục với player vẫn di chuyển.
+                Room room=rooms.find(roomId);
+                if(room!=null) {endMatch(room);publishLists();}
             }
             return;
         }
@@ -284,32 +306,32 @@ public final class LobbyGameServer implements AutoCloseable, GameEventSink {
     }
     @Override public synchronized void onPlayerHardDropped(Session s) {
         String roomId = s.getRoomId();
-        Match match = roomId == null ? null : matches.get(roomId);
-        if (match != null && match.active) {
-            int playerNum = match.context.playerId(s.getPlayerId()).orElse(-1);
-            if (playerNum > 0) {
-                match.game.submit(new PlayerDisconnectedCommand(playerNum, true));
-            }
-        }
+        // leave dừng toàn bộ runtime: không enqueue remove rồi bỏ qua kết quả submit.
         leave(s);
     }
     @Override public synchronized void onPlayerReconnected(Session s) {
         String roomId = s.getRoomId();
         Match match = roomId == null ? null : matches.get(roomId);
-        if (match != null && match.active) {
+        if (!seamlessRecovery || match == null || !match.active || s.getState()!=SessionState.PLAYING)
+            throw new SessionRecoveryRejectedException("No active match to recover");
+        {
             int playerNum = match.context.playerId(s.getPlayerId()).orElse(-1);
-            if (playerNum > 0) {
-                match.game.submit(new PlayerReconnectedCommand(playerNum));
+            match.initialized.remove(s.getPlayerId());
+            if (playerNum <= 0 || !match.game.submit(new PlayerReconnectedCommand(playerNum))) {
+                Room room=rooms.find(roomId);
+                if(room!=null) {endMatch(room);publishLists();}
+                throw new IllegalStateException("Recovery command queue unavailable");
             }
             var roster = match.roster;
             var names = new HashMap<String, String>();
             for (Session p : roster) names.put(p.getPlayerId(), p.getUsername());
             Packet started = DemoPacketCodec.started(match.context, names);
-            send(s, started);
+            if(!send(s, started)) throw new IllegalStateException("Recovery metadata unavailable");
             var latest = match.game.createUpdate();
             match.barrier = latest == null ? -1L : latest.getTick();
+            match.recoveryFullAfter.put(s.getPlayerId(),match.barrier);
+            match.suspended.remove(s.getPlayerId());
             match.game.requestFullState();
-            match.initialized.add(s.getPlayerId());
         }
     }
     public void start() throws IOException { server.start(); }

@@ -49,7 +49,8 @@ public final class Session {
     public void setRoomId(String roomId) { this.roomId = roomId; }
     public void setOutboundSender(OutboundSender sender) { this.outboundSender = sender; }
 
-    public boolean transition(SessionState expected, SessionState next) {
+    // Cùng monitor với attach/expiry: ghi stateBeforeDisconnect trước khi giao quyền reconnect.
+    public synchronized boolean transition(SessionState expected, SessionState next) {
         if (!state.compareAndSet(expected, next)) {
             return false;
         }
@@ -59,7 +60,7 @@ public final class Session {
         return true;
     }
 
-    public SessionState restoreStateAfterReconnect(SessionState fallback) {
+    public synchronized SessionState restoreStateAfterReconnect(SessionState fallback) {
         SessionState previous = stateBeforeDisconnect;
         stateBeforeDisconnect = null;
         SessionState restored = previous != null ? previous : fallback;
@@ -67,7 +68,7 @@ public final class Session {
         return restored;
     }
 
-    public void setState(SessionState next) {
+    public synchronized void setState(SessionState next) {
         state.set(Objects.requireNonNull(next, "next"));
     }
 

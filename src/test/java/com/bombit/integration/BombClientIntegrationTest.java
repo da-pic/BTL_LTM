@@ -26,7 +26,8 @@ class BombClientIntegrationTest {
         final ExecutorService ui=Executors.newSingleThreadExecutor();
         final Queue<Throwable> failures=new ConcurrentLinkedQueue<>();
         final BlockingQueue<Packet> lobby=new LinkedBlockingQueue<>();
-        final DemoClientConnection connection=new DemoClientConnection(ui,c->{},s->{},failures::add);
+        final Queue<String> statuses=new ConcurrentLinkedQueue<>();
+        final DemoClientConnection connection=new DemoClientConnection(ui,c->{},statuses::add,failures::add);
         Client(int port,String name)throws Exception {
             connection.setLobbyListener(lobby::add);connection.connect("127.0.0.1",port,name);
         }
@@ -108,6 +109,38 @@ class BombClientIntegrationTest {
         }finally {
             server.close();accept.join(2000);assertFalse(accept.isAlive());assertNull(failure.get());
             assertEquals(0,server.activeMatchCount());assertEquals(0,server.snapshotWorkerCount());
+        }
+    }
+    @Test void reconnectKeepsControllerInputSequenceAndBombRequestCounterWithRealGameplay()throws Exception {
+        var nanos=new AtomicLong();var results=new LinkedBlockingQueue<BombCommandResult>();
+        var games=new GameRuntimeManager(id->map(),(room,state,ids)->new BombGameplayExtension(state,ids,new BombRules(1000,1,2),
+                e->{},results::add,nanos::get,System::currentTimeMillis));
+        var server=new LobbyGameServer(0,games,new PlayerMovementRules(24,150));server.setSeamlessRecovery(true);
+        var failure=new AtomicReference<Throwable>();
+        var accept=new Thread(()->{try{server.start();}catch(Throwable e){failure.set(e);}});accept.start();
+        try(server;var a=new Client(server.port(),"Recovery A");var b=new Client(server.port(),"Recovery B")) {
+            a.connection.setAutoReconnect(true);start(a,b);
+            var controller=a.call(a.connection::movement);var prediction=a.call(controller::prediction);
+            var context=a.call(a.connection::context);String sessionId=a.connection.sessionId();
+            a.call(()->{controller.plantBomb();return null;});
+            var first=results.poll(3,TimeUnit.SECONDS);assertNotNull(first);assertEquals(BombError.NONE,first.error());
+            for(int n=0;n<6;n++)a.call(()->{controller.send(prediction.predict(Direction.DOWN,true));return null;});
+            waitFor(()->a.call(()->controller.world().getPlayers().get(a.connection.localId()).getLastProcessedInput()>=6));
+            server.transport().getSessionManager().find(sessionId).orElseThrow().closeSocket();
+            waitFor(()->a.statuses.stream().anyMatch(s->s.contains("Reconnected"))
+                    &&a.call(()->!a.connection.isReconnecting()&&controller.isInputReady()));
+            assertSame(controller,a.call(a.connection::movement));assertSame(prediction,a.call(controller::prediction));
+            assertEquals(context,a.call(a.connection::context));assertEquals(sessionId,a.connection.sessionId());
+            assertTrue(a.call(()->controller.world().getEntities().containsKey("BOMB:1")));
+            a.call(()->{controller.send(prediction.predict(Direction.DOWN,true));controller.plantBomb();return null;});
+            var second=results.poll(3,TimeUnit.SECONDS);assertNotNull(second,"Request counter must not reset to duplicate 1");
+            assertEquals(BombError.NONE,second.error());assertEquals(2,second.bombId());
+            waitFor(()->a.call(()->controller.world().getPlayers().get(a.connection.localId()).getLastProcessedInput()>=7)
+                    &&b.call(()->b.connection.movement().world().getEntities().containsKey("BOMB:2")));
+            assertTrue(a.failures.isEmpty());assertTrue(b.failures.isEmpty());
+        }finally {
+            server.close();accept.join(2000);assertFalse(accept.isAlive());assertNull(failure.get());
+            assertEquals(0,server.activeMatchCount());assertEquals(0,server.snapshotWorkerCount());assertTrue(server.failure().isEmpty());
         }
     }
     static String start(Client a,Client b)throws Exception {
