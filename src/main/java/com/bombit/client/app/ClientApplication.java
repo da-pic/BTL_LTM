@@ -39,6 +39,7 @@ public final class ClientApplication {
                 if (gameWindow.get() != null) gameWindow.get().showError(error.getMessage());
                 else label.setText("Connection failed: " + error.getMessage());
             });
+            client.setAutoReconnect(true);
             owner.set(client);
             waiting.addWindowListener(new WindowAdapter() {
                 @Override public void windowClosing(WindowEvent event) { client.close(); waiting.dispose(); }

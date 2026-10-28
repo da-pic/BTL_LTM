@@ -76,7 +76,7 @@ public final class LobbyWindow extends JFrame {
             if(game!=null) { game.disposeGame();game=null; }
             status.setText("Disconnected: "+error.getMessage());updateButtons();
         });
-        client=next;next.setLobbyListener(this::packet);
+        client=next;next.setAutoReconnect(true);next.setLobbyListener(this::packet);
         Thread worker=new Thread(() -> { try { next.connect(address,number,username); } catch(Exception ignored) { } },"Lobby-Connect");
         worker.setDaemon(true);worker.start();
     }
