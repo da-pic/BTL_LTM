@@ -16,11 +16,22 @@ import java.util.Objects;
  * EntityData là ảnh dữ liệu để truyền; luật bom/item vẫn thuộc các hệ thống TV3.
  */
 public class GameState {
+    private final List<com.bombit.common.dto.PlantRequestResult> plantResults=new ArrayList<>();
+    public void recordPlantResult(com.bombit.common.dto.PlantRequestResult result){if(plantResults.size()>=256)throw new IllegalStateException("Plant result backlog");plantResults.add(Objects.requireNonNull(result));}
+    public List<com.bombit.common.dto.PlantRequestResult> plantResults(){return List.copyOf(plantResults);}
+    public void clearPlantResults(){plantResults.clear();}
     private long nextEventId;
     public void recordGameEvent(com.bombit.server.game.event.GameEvent event){
         addGameNotice(new com.bombit.common.dto.GameNotice(++nextEventId,event));
     }
     private com.bombit.common.dto.MatchFrame matchFrame;
+    // Ảnh luật đội do game thread tạo; không nhét winningTeam vào winnerPlayerId của Classic.
+    private com.bombit.common.dto.ShadowFrame shadowFrame;
+    public com.bombit.common.dto.ShadowFrame getShadowFrame(){return shadowFrame;}
+    public void setShadowFrame(com.bombit.common.dto.ShadowFrame frame){shadowFrame=Objects.requireNonNull(frame);}
+    private com.bombit.common.dto.ShadowScanFrame shadowScans;
+    public com.bombit.common.dto.ShadowScanFrame getShadowScans(){return shadowScans;}
+    public void setShadowScans(com.bombit.common.dto.ShadowScanFrame frame){shadowScans=Objects.requireNonNull(frame);}
     public com.bombit.common.dto.MatchFrame getMatchFrame(){return matchFrame;}
     public void setMatchFrame(com.bombit.common.dto.MatchFrame frame){matchFrame=frame;}
     private final List<com.bombit.common.dto.GameNotice> gameNotices=new ArrayList<>();

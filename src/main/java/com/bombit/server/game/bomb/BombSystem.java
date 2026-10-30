@@ -23,7 +23,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 /** Luật đặt và kích nổ bom phía server. Được gọi từ Game Loop. */
 public final class BombSystem {
-    private final AtomicInteger nextBombId;
+    private final java.util.function.IntSupplier nextBombId;
     private final long fuseMillis;
     private final GameEventSink eventSink;
 
@@ -32,12 +32,16 @@ public final class BombSystem {
     }
 
     BombSystem(long fuseMillis, GameEventSink eventSink, int firstBombId) {
+        this(fuseMillis, eventSink, new AtomicInteger(firstBombId)::getAndIncrement);
+    }
+    /** Shadow chia sẻ allocator giữa bom thường và scan; Classic giữ bộ đếm riêng như trước. */
+    public BombSystem(long fuseMillis, GameEventSink eventSink, java.util.function.IntSupplier ids) {
         if (fuseMillis <= 0) {
             throw new IllegalArgumentException("Fuse must be positive");
         }
         this.fuseMillis = fuseMillis;
         this.eventSink = Objects.requireNonNull(eventSink);
-        this.nextBombId = new AtomicInteger(firstBombId);
+        this.nextBombId = Objects.requireNonNull(ids);
     }
 
     public BombPlacementResult plantBomb(String playerId, long nowMillis, BombWorld world) {
@@ -55,7 +59,7 @@ public final class BombSystem {
         if (world.tileType(position) != TileType.EMPTY) {
             return BombPlacementResult.failure(BombError.INVALID_CELL);
         }
-        if (world.bombAt(position).isPresent()) {
+        if (world.isCellOccupied(position)) {
             return BombPlacementResult.failure(BombError.CELL_OCCUPIED);
         }
         if (world.activeBombCount(playerId) >= world.playerBombLimit(playerId)) {
@@ -63,7 +67,7 @@ public final class BombSystem {
         }
 
         Bomb bomb = new Bomb(
-                nextBombId.getAndIncrement(),
+                nextBombId.getAsInt(),
                 playerId,
                 position,
                 nowMillis,
@@ -109,6 +113,7 @@ public final class BombSystem {
             affectedCells.addAll(bombCells);
 
             for (TilePosition cell : bombCells) {
+                world.hitByBlast(cell);
                 world.bombAt(cell).ifPresent(chainedBomb -> {
                     if (!processedBombIds.contains(chainedBomb.id())) {
                         pending.add(chainedBomb);

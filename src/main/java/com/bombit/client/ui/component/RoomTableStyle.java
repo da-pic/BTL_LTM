@@ -16,7 +16,7 @@ public final class RoomTableStyle {
         table.getTableHeader().setBorder(null); table.getTableHeader().setPreferredSize(new Dimension(0,44));
         table.getTableHeader().setBackground(new Color(20,33,52)); table.getTableHeader().setReorderingAllowed(false);
         table.getTableHeader().setResizingAllowed(false); table.getTableHeader().setDefaultRenderer(new HeaderRenderer());
-        int[] widths={100,235,170,90,120,120}; for(int i=0;i<widths.length;i++)table.getColumnModel().getColumn(i).setPreferredWidth(widths[i]);
+        int[] widths={100,235,170,90,120,120,150}; for(int i=0;i<Math.min(widths.length,table.getColumnCount());i++)table.getColumnModel().getColumn(i).setPreferredWidth(widths[i]);
         table.setDefaultRenderer(Object.class,new CellRenderer());
     }
     public static void styleSpinner(JSpinner spinner) {

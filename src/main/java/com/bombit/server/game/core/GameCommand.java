@@ -9,7 +9,7 @@ import java.util.Objects;
  * Mọi field/getter final; các lớp con final không thể thay đổi payload sau enqueue.
  */
 public sealed class GameCommand permits MoveCommand, StopMovingCommand, PlantBombCommand,
-        PlayerDisconnectedCommand, PlayerReconnectedCommand {
+        PlayerDisconnectedCommand, PlayerReconnectedCommand, RewindCommand {
     private final int playerId;
     private final Direction direction;
     private final boolean moving;

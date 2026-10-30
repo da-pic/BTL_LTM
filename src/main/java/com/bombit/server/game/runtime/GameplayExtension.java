@@ -9,6 +9,11 @@ import com.bombit.server.game.core.GameCommand;
 public interface GameplayExtension {
     /** Called once on the owning game thread, before the first command. */
     default void onStart() { }
+    /** Paradox mở một bước xử lý trước command; các mode hiện hữu không đổi hành vi. */
+    default void beforeTick() { }
+    default long timelineEpoch() { return 0; }
+    /** Bước restore chỉ công bố checkpoint, không mô phỏng thêm movement/timer ngay sau đó. */
+    default boolean skipSimulationTick() { return false; }
     void processCommand(GameCommand command);
     void update(long nowMillis);
     /** Runs on the same game thread, including failure and shutdown. */

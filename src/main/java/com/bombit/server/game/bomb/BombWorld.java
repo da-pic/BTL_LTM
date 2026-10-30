@@ -26,6 +26,8 @@ public interface BombWorld {
     TileType tileType(TilePosition position);
 
     Optional<Bomb> bombAt(TilePosition position);
+    default boolean isCellOccupied(TilePosition position) { return bombAt(position).isPresent(); }
+    default void hitByBlast(TilePosition position) { }
 
     Optional<Bomb> bombById(int bombId);
 

@@ -64,6 +64,25 @@ public final class GameClientConnection implements AutoCloseable {
     private Consumer<Packet> lobby;
     private volatile MovementClientController movement;
     private com.bombit.common.dto.MatchResult lastResult;
+    private com.bombit.common.dto.TeamMatchResult lastTeamResult;
+    public com.bombit.common.dto.TeamMatchResult lastTeamResult(){return lastTeamResult;}
+    private final boolean currentProtocol;
+    private volatile com.bombit.common.dto.MatchStartMetadata metadata;
+    private volatile com.bombit.common.dto.RoomStateView roomState;
+    private java.util.UUID connectionId;
+    private long currentSnapshotMillis=-1;
+    private com.bombit.common.dto.ShadowFrame.Result lastShadowResult;
+    public com.bombit.common.dto.ShadowFrame.Result lastShadowResult(){return lastShadowResult;}
+    private volatile Packet lastPlantResult;
+    public boolean isCurrentProtocol(){return currentProtocol;}
+    public com.bombit.common.dto.MatchStartMetadata metadata(){return metadata;}
+    public com.bombit.common.dto.RoomStateView roomState(){return roomState;}
+    public Packet lastPlantResult(){return lastPlantResult;}
+    public Packet matchCommand(Packet inner)throws IOException{if(context==null)throw new IllegalStateException("No active match");return currentProtocol?MatchEnvelopeV3Codec.command(context.matchId(),metadata.stream().timelineEpoch(),inner):MatchEnvelopeCodec.wrap(context.matchId(),inner);}
+    /** Product lobby dùng factory này; constructor cũ giữ diagnostic v2, không auto downgrade. */
+    public static GameClientConnection current(Executor ui,Consumer<MovementClientController> started,Consumer<String> status,Consumer<Throwable> errors){
+        return new GameClientConnection(ui,started,status,errors,new RecoveryTimeouts(29000,2500,4000,200,1500),true);
+    }
     public com.bombit.common.dto.MatchResult lastResult(){return lastResult;}
 
     public GameClientConnection(Executor ui, Consumer<MovementClientController> started,
@@ -72,7 +91,11 @@ public final class GameClientConnection implements AutoCloseable {
     }
     GameClientConnection(Executor ui, Consumer<MovementClientController> started,
                          Consumer<String> status, Consumer<Throwable> errors,RecoveryTimeouts timeouts) {
+        this(ui,started,status,errors,timeouts,false);
+    }
+    private GameClientConnection(Executor ui,Consumer<MovementClientController> started,Consumer<String> status,Consumer<Throwable> errors,RecoveryTimeouts timeouts,boolean currentProtocol){
         this.ui=ui; this.started=started; this.status=status; this.errors=errors;
+        this.currentProtocol=currentProtocol;
         this.timeouts=timeouts;
         network.setPacketQueueEnabled(false);
         network.addPacketListener(packet -> {
@@ -119,8 +142,8 @@ public final class GameClientConnection implements AutoCloseable {
         this.host = host;
         this.port = port;
         try {
-            Packet connect = SessionPacketCodec.connectRequest(name);
-            SessionPacketCodec.connect(connect);
+            Packet connect = currentProtocol?SessionV3Codec.connectRequest(name):SessionPacketCodec.connectRequest(name);
+            if(currentProtocol)SessionV3Codec.connect(connect);else SessionPacketCodec.connect(connect);
             wireEpoch.incrementAndGet();receivedNanos=System.nanoTime();
             network.connect(host, port);
             network.send(connect);
@@ -155,6 +178,74 @@ public final class GameClientConnection implements AutoCloseable {
         } catch (RuntimeException error) { uiBytes.addAndGet(-bytes);uiSlots.release(); fail(error); }
     }
     private void packet(Packet packet) {
+        if(!currentProtocol){packetLegacy(packet);return;}
+        try{packetCurrent(packet);}catch(IOException error){fail(error);}
+    }
+    /** V3 được kiểm strict trước khi dùng DTO bridge tới controller/logic recovery hiện có. */
+    private void packetCurrent(Packet packet)throws IOException{
+        switch(packet.getType()){
+            case PacketType.CONNECT_ACK->{var ack=SessionV3Codec.decodeAcknowledgement(packet);
+                if(recovery!=null&&ack.connectionId().equals(connectionId))throw new IllegalStateException("Recovery reused connection ID");connectionId=ack.connectionId();
+                packetLegacy(SessionPacketCodec.acknowledgement(ack.playerId(),ack.reconnectToken()));}
+            case PacketType.ROOM_STATE->{roomState=MetadataV3Codec.decodeRoom(packet);if(lobby!=null)lobby.accept(packet);}
+            case PacketType.LIST_ROOMS->{MetadataV3Codec.decodeRooms(packet);if(lobby!=null)lobby.accept(packet);}
+            case PacketType.LEAVE_ROOM->{var m=JsonV3.fields(JsonV3.object(packet.getJsonPayload(),4096),"roomId","left");JsonV3.uuid(m,"roomId");if(!JsonV3.bool(m,"left"))throw new IllegalArgumentException("Invalid leave");roomState=null;if(lobby!=null)lobby.accept(packet);}
+            case PacketType.CHAT->{var m=JsonV3.fields(JsonV3.object(packet.getJsonPayload(),4096),"roomId","sessionId","username","message");JsonV3.uuid(m,"roomId");JsonV3.uuid(m,"sessionId");JsonV3.text(m,"username",32);JsonV3.text(m,"message",256);if(lobby!=null)lobby.accept(packet);}
+            case PacketType.GAME_STARTED->{
+                var next=MetadataV3Codec.decodeStarted(packet);
+                if(sessionId==null||next.identity().playerId(sessionId).orElse(-1)!=next.stream().recipientPlayerId()
+                        ||!java.util.Set.of(com.bombit.common.dto.GameMode.CLASSIC,com.bombit.common.dto.GameMode.SHADOW_RELAY,com.bombit.common.dto.GameMode.PARADOX).contains(next.configuration().gameMode()))throw new IllegalStateException("Unsupported metadata/recipient");
+                if(metadata!=null&&metadata.identity().matchId().equals(next.identity().matchId())){
+                    if(!metadata.identity().equals(next.identity())||!metadata.configuration().equals(next.configuration())||!metadata.players().equals(next.players())||metadata.configurationRevision()!=next.configurationRevision())throw new IllegalStateException("Changed match context");
+                    if(next.stream().viewEpoch()<=metadata.stream().viewEpoch()||next.stream().timelineEpoch()<metadata.stream().timelineEpoch())return;
+                }
+                if(metadata==null||!metadata.identity().matchId().equals(next.identity().matchId())){lastShadowResult=null;lastResult=null;lastTeamResult=null;}
+                metadata=next;currentSnapshotMillis=-1;
+                var names=new java.util.HashMap<String,String>();for(var p:next.players())names.put(p.sessionId(),p.username());
+                packetLegacy(DemoPacketCodec.started(next.identity(),names));
+                if(movement!=null)movement.bindCurrentMetadata(next);
+                var captured=next;control.schedule(()->dispatch(()->{if(metadata==captured&&movement!=null&&movement.world().needsFullState()&&recovery==null)fail(new IOException("Full state timeout"));}),timeouts.fullMillis(),TimeUnit.MILLISECONDS);
+            }
+            case PacketType.GAME_SNAPSHOT,PacketType.FULL_STATE_SYNC->{
+                if(metadata==null||context==null||movement==null)return;Recovery r=recovery;if(r!=null&&!r.metadata)return;
+                Packet body;try{body=MatchEnvelopeV3Codec.unwrapUpdate(packet,metadata.identity().matchId(),metadata.stream());}catch(ProtocolRejection stale){return;}
+                var frame=SnapshotV6Codec.decodeRecipient(body,metadata);if(r!=null&&!frame.update().isFullState())return;
+                if(frame.update().getTick()<=movement.world().getTick()&&!movement.world().needsFullState())return;
+                if(frame.matchTimeMillis()<currentSnapshotMillis)throw new IOException("Time decreased in stream");
+                movement.acceptSnapshotV6(frame);currentSnapshotMillis=frame.matchTimeMillis();
+                if(frame.update().isFullState()&&!movement.isClosed()&&!movement.world().needsFullState()&&movement.lastAppliedFullTick()==frame.update().getTick()){
+                    movement.resumeAfterRecovery();if(r!=null){synchronized(recoveryLock){if(recovery==r){recovery=null;reconnecting.set(false);recoveryState=RecoveryState.CONNECTED;}}
+                        recoveryListener.accept(recoveryState);status.accept("Reconnected. Match synchronized.");}
+                }
+            }
+            case PacketType.GAME_OVER->{if(metadata==null||context==null)return;Packet body;try{body=MatchEnvelopeV3Codec.unwrapUpdate(packet,metadata.identity().matchId(),metadata.stream());}catch(ProtocolRejection stale){return;}
+                if(metadata.configuration().gameMode()==com.bombit.common.dto.GameMode.SHADOW_RELAY)lastShadowResult=ShadowModeCodec.result(JsonV3.object(body.getJsonPayload(),16384));
+                else if(metadata.configuration().isTeamMatch())lastTeamResult=GameplayV3Codec.teamResult(JsonV3.object(body.getJsonPayload(),16384),metadata.configuration().gameMode());
+                else lastResult=GameplayV3Codec.result(JsonV3.object(body.getJsonPayload(),16384),metadata.configuration().gameMode());
+                synchronized(recoveryLock){recovery=null;reconnecting.set(false);recoveryState=RecoveryState.CONNECTED;}
+                if(movement!=null)movement.close();movement=null;context=null;recoveryListener.accept(recoveryState);if(lobby!=null)lobby.accept(packet);}
+            case PacketType.REWIND_RESULT->{if(metadata==null||context==null||metadata.configuration().gameMode()!=com.bombit.common.dto.GameMode.PARADOX)return;
+                Packet body;try{body=MatchEnvelopeV3Codec.unwrapUpdate(packet,context.matchId(),metadata.stream());}catch(ProtocolRejection stale){return;}
+                var answer=ParadoxCodec.result(body);if(answer.playerId()!=metadata.stream().recipientPlayerId()||answer.timelineEpoch()!=metadata.stream().timelineEpoch())throw new IOException("Wrong rewind result context");
+                if(movement!=null)movement.acceptRewindResult(answer);
+                if(lobby!=null)lobby.accept(packet);}
+            case PacketType.PLANT_RESULT->{if(metadata==null||context==null)return;Packet body;try{body=MatchEnvelopeV3Codec.unwrapUpdate(packet,context.matchId(),metadata.stream());}catch(ProtocolRejection stale){return;}
+                var m=JsonV3.fields(JsonV3.object(body.getJsonPayload(),16384),"requestId","bombType","status","errorCode","bombId","processedTick");JsonV3.integer(m,"requestId",1,Long.MAX_VALUE);
+                com.bombit.common.dto.BombType.valueOf(JsonV3.text(m,"bombType",8));String state=JsonV3.text(m,"status",16);if(!java.util.Set.of("ACCEPTED","REJECTED").contains(state))throw new IllegalArgumentException("Bad plant status");
+                if(state.equals("ACCEPTED")){if(m.get("errorCode")!=null)throw new IllegalArgumentException("Accepted with error");JsonV3.integer(m,"bombId",1,Integer.MAX_VALUE);JsonV3.integer(m,"processedTick",1,Long.MAX_VALUE);}
+                else {JsonV3.text(m,"errorCode",64);if(m.get("bombId")!=null)throw new IllegalArgumentException("Rejected with bomb");if(m.get("processedTick")!=null)JsonV3.integer(m,"processedTick",1,Long.MAX_VALUE);}
+                lastPlantResult=body;
+                if(movement!=null)movement.acceptPlantResult(body);
+            }
+            case PacketType.BOMB_PLANTED,PacketType.BOMB_EXPLODE,PacketType.ITEM_SPAWN,PacketType.ITEM_PICKED_UP,PacketType.PLAYER_DIE->{
+                if(metadata==null||movement==null||recovery!=null)return;try{movement.acceptNoticeV3(MatchEnvelopeV3Codec.unwrapUpdate(packet,metadata.identity().matchId(),metadata.stream()));}catch(ProtocolRejection stale){return;}}
+            case PacketType.ERROR->{String code=SessionV3Codec.errorCode(packet);if(code.equals("UNSUPPORTED_PROTOCOL")||code.equals("UNSUPPORTED_SNAPSHOT")||code.equals("CLIENT_CAPABILITY_MISMATCH")){fail(new IOException("Connection rejected: "+code));return;}
+                // Logic cũ nhận DTO lỗi đã validate; callback UI vẫn giữ nguyên packet v3.
+                if(recovery!=null)packetLegacy(SessionPacketCodec.error(code));else if(lobby!=null)lobby.accept(packet);else fail(new IOException(code));}
+            default->{ }
+        }
+    }
+    private void packetLegacy(Packet packet) {
         switch (packet.getType()) {
             case PacketType.CONNECT_ACK -> {
                 var ack = SessionPacketCodec.decodeAcknowledgement(packet);
@@ -271,6 +362,8 @@ public final class GameClientConnection implements AutoCloseable {
     public void requestFullState() {
         if (closed.get() || reconnecting.get() || context == null || !resyncQueued.compareAndSet(false, true)) return;
         var match = context.matchId();
+        var capturedMetadata=metadata;
+        if(currentProtocol&&movement!=null){movement.suspendForRecovery();movement.prepareRecoveryOnUi();}
         long epoch=wireEpoch.get();
         long tick = movement == null ? -1 : movement.world().getTick();
         long delay = Math.max(0, lastResync + TimeUnit.MILLISECONDS.toNanos(1100) - System.nanoTime());
@@ -280,7 +373,8 @@ public final class GameClientConnection implements AutoCloseable {
                     if (!closed.get() && !reconnecting.get() && wireEpoch.get()==epoch && context!=null && context.matchId().equals(match)) {
                         lastResync = System.nanoTime();
                         var request = new ResyncPacketCodec.Request(tick, ResyncPacketCodec.Reason.BASELINE_MISMATCH);
-                        network.send(MatchEnvelopeCodec.wrap(match, ResyncPacketCodec.encode(request)));
+                        if(currentProtocol){if(metadata!=capturedMetadata)return;network.send(MatchEnvelopeV3Codec.command(match,capturedMetadata.stream().timelineEpoch(),JsonV3.packet(PacketType.REQUEST_FULL_STATE,JsonV3.body("viewEpoch",capturedMetadata.stream().viewEpoch(),"lastAppliedTick",tick,"reason","BASELINE_MISMATCH"))));}
+                        else network.send(MatchEnvelopeCodec.wrap(match, ResyncPacketCodec.encode(request)));
                     }
                 } catch (Exception error) {
                     if (autoReconnect && context != null && !closed.get() && sessionId != null && reconnectToken != null) {
@@ -347,7 +441,7 @@ public final class GameClientConnection implements AutoCloseable {
             synchronized(recoveryLock) {
                 if(closed.get()||recovery!=r||r.epoch!=epoch||recoveryState!=RecoveryState.WAITING_ACK)return;
             }
-            receivedNanos=System.nanoTime();network.send(SessionPacketCodec.reconnectRequest(sessionId,reconnectToken));
+            receivedNanos=System.nanoTime();network.send(currentProtocol?SessionV3Codec.reconnectRequest(sessionId,reconnectToken):SessionPacketCodec.reconnectRequest(sessionId,reconnectToken));
         } catch(IOException|RuntimeException failed) {retry(r,epoch);}
     }
     private void retry(Recovery r,long epoch) {

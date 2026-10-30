@@ -29,13 +29,13 @@ public final class SessionPacketCodec {
 
     public static Packet connectRequest(String name) {
         return new Packet(PacketType.CONNECT, "{\"playerName\":" + quote(name)
-                + ",\"protocolVersion\":" + IntegrationContract.PROTOCOL_VERSION + "}");
+                + ",\"protocolVersion\":" + IntegrationContract.LEGACY_PROTOCOL_VERSION + "}");
     }
 
     public static Acknowledgement decodeAcknowledgement(Packet packet) {
         var fields = object(packet, PacketType.CONNECT_ACK, Set.of("playerId", "reconnectToken", "serverVersion",
                 "protocolVersion", "heartbeatIntervalMs", "heartbeatTimeoutMs", "reconnectGraceMs"));
-        if (!Long.valueOf(IntegrationContract.PROTOCOL_VERSION).equals(fields.get("protocolVersion"))) {
+        if (!Long.valueOf(IntegrationContract.LEGACY_PROTOCOL_VERSION).equals(fields.get("protocolVersion"))) {
             throw new IllegalArgumentException("Unsupported acknowledgement");
         }
         var id = java.util.UUID.fromString((String) fields.get("playerId"));
@@ -80,7 +80,7 @@ public final class SessionPacketCodec {
     public static Packet acknowledgement(String playerId, String token) {
         return new Packet(PacketType.CONNECT_ACK, "{\"playerId\":" + quote(playerId)
                 + ",\"reconnectToken\":" + quote(token) + ",\"serverVersion\":\"0.1.0\",\"protocolVersion\":"
-                + IntegrationContract.PROTOCOL_VERSION + ",\"heartbeatIntervalMs\":" + IntegrationContract.HEARTBEAT_INTERVAL_MILLIS
+                + IntegrationContract.LEGACY_PROTOCOL_VERSION + ",\"heartbeatIntervalMs\":" + IntegrationContract.HEARTBEAT_INTERVAL_MILLIS
                 + ",\"heartbeatTimeoutMs\":" + IntegrationContract.HEARTBEAT_TIMEOUT_MILLIS
                 + ",\"reconnectGraceMs\":" + IntegrationContract.RECONNECT_GRACE_MILLIS + "}");
     }

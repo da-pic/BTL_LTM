@@ -42,4 +42,32 @@ public final class ItemWorldAdapter implements ItemWorld {
         effects.apply(type,p,rules);
     }
     public void clear(){check();for(int id:List.copyOf(items.keySet()))removeItem(id);}
+
+    /** Chỉ lưu item đang tồn tại; không giữ Item mutable trong lịch sử. */
+    public record SavedItem(int id, ItemType type, TilePosition position) {
+        public SavedItem {
+            if (id <= 0) throw new IllegalArgumentException("Invalid item ID");
+            Objects.requireNonNull(type); Objects.requireNonNull(position);
+        }
+    }
+    public List<SavedItem> captureCheckpoint() {
+        check(); return items.values().stream().map(i -> new SavedItem(i.id(), i.type(), i.position())).toList();
+    }
+    public void validateRestore(List<SavedItem> saved) {
+        check(); Objects.requireNonNull(saved);
+        var ids = new HashSet<Integer>(); var positions = new HashSet<TilePosition>();
+        for (var item : saved) {
+            if (!ids.add(item.id()) || !positions.add(item.position())
+                    || !state.getMap().isInsideMap(item.position().x(), item.position().y()))
+                throw new IllegalArgumentException("Invalid item checkpoint");
+        }
+    }
+    /** Coordinator khôi phục map trước, sau đó mới dựng lại index cell và entity projection. */
+    public void restoreCheckpoint(List<SavedItem> saved) {
+        validateRestore(saved);
+        for (var item : saved) if (state.getMap().tileAt(item.position().x(), item.position().y()) != TileType.EMPTY)
+            throw new IllegalArgumentException("Item checkpoint on blocked tile");
+        clear();
+        for (var item : saved) addItem(new Item(item.id(), item.type(), item.position()));
+    }
 }

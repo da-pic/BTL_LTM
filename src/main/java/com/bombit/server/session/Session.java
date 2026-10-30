@@ -17,6 +17,11 @@ public final class Session {
     private volatile long lastHeartbeatNanos = System.nanoTime();
     private volatile OutboundSender outboundSender;
     private volatile SessionState stateBeforeDisconnect;
+    private volatile java.util.Set<String> features=java.util.Set.of();
+    private volatile UUID connectionId=UUID.randomUUID();
+    public java.util.Set<String> features(){return features;}
+    public void setFeatures(java.util.Set<String> features){this.features=java.util.Set.copyOf(features);}
+    public UUID connectionId(){return connectionId;}
 
     public Session(String username, Socket socket) {
         this(UUID.randomUUID().toString(), UUID.randomUUID().toString(), username, socket);
@@ -84,6 +89,7 @@ public final class Session {
         Objects.requireNonNull(newSocket, "newSocket");
         closeSocket();
         socket = newSocket;
+        connectionId=UUID.randomUUID();
         updateHeartbeat();
     }
 

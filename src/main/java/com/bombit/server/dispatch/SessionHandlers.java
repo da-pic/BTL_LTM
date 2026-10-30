@@ -19,7 +19,7 @@ public final class SessionHandlers {
         router.registerHandler(PacketType.CONNECT, (id, packet) -> {
             Session session = sessions.find(id).orElseThrow();
             var connect = SessionPacketCodec.connect(packet);
-            if (connect.protocolVersion() != IntegrationContract.PROTOCOL_VERSION) {
+            if (connect.protocolVersion() != IntegrationContract.LEGACY_PROTOCOL_VERSION) {
                 throw new UnsupportedVersionException();
             }
             session.completeHandshake(connect.playerName());
@@ -39,4 +39,13 @@ public final class SessionHandlers {
     }
 
     public static final class UnsupportedVersionException extends IllegalArgumentException { }
+    /** Chỉ composition root live v3 bật handler này, không đổi profile chẩn đoán legacy. */
+    public static void registerCurrent(MessageRouter router,SessionManager sessions,OutboundSender sender,java.util.function.Consumer<Session> connected){
+        register(router,sessions,sender,connected);
+        router.registerHandler(PacketType.CONNECT,(id,packet)->{
+            var request=SessionV3Codec.connect(packet);var session=sessions.find(id).orElseThrow();
+            session.setFeatures(request.features());session.completeHandshake(request.playerName());
+            sender.send(session,OutboundMessage.fromPacket(SessionV3Codec.acknowledgement(id,session.getReconnectToken(),session.connectionId())));connected.accept(session);
+        });
+    }
 }

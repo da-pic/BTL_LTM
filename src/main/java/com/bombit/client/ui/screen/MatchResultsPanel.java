@@ -2,6 +2,10 @@ package com.bombit.client.ui.screen;
 
 import com.bombit.client.ui.UiTheme;
 import com.bombit.common.dto.MatchResult;
+import com.bombit.common.dto.ShadowFrame;
+import com.bombit.common.dto.MatchStartMetadata;
+import com.bombit.common.dto.TeamId;
+import com.bombit.common.dto.TeamMatchResult;
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
 import javax.swing.table.DefaultTableCellRenderer;
@@ -33,6 +37,7 @@ public final class MatchResultsPanel extends JPanel {
     }
     public void showResult(MatchResult result,Map<Integer,String> names){showResult(result,names,-1);}
     public void showResult(MatchResult result,Map<Integer,String> names,int localId){
+        rows.setColumnIdentifiers(new Object[]{"HẠNG","NGƯỜI CHƠI","KẾT QUẢ"});styleTable();
         rows.setRowCount(0);
         switch(result.reason()){
             case LAST_ALIVE->{boolean won=result.winnerPlayerId()!=null&&result.winnerPlayerId()==localId;headline.setText(won?"CHIẾN THẮNG TUYỆT ĐỐI!":"BẠN ĐÃ THUA");summary.setText("Người sống sót cuối cùng: "+names.getOrDefault(result.winnerPlayerId(),"P"+result.winnerPlayerId()));trophy.setText(won?"★":"×");trophy.setBackground(won?new Color(245,158,11):new Color(190,45,68));}
@@ -46,7 +51,35 @@ public final class MatchResultsPanel extends JPanel {
             rows.addRow(new Object[]{"#"+rank.rank(),player,outcome});
         }
     }
+    /** Kết quả đội không dựng hạng cá nhân hoặc vị trí cuối của đối thủ ẩn. */
+    public void showTeamResult(ShadowFrame.Result result,java.util.List<MatchStartMetadata.Member> players,int localId){
+        rows.setColumnIdentifiers(new Object[]{"ĐỘI","NGƯỜI CHƠI","KẾT QUẢ"});styleTable();rows.setRowCount(0);
+        TeamId own=players.stream().filter(p->p.playerId()==localId).map(MatchStartMetadata.Member::team).findFirst().orElse(null);
+        boolean aborted=result.reason()==ShadowFrame.Reason.ABORTED,draw=result.winningTeam()==null;
+        headline.setText(aborted?"TRẬN ĐẤU BỊ HỦY":draw?"HAI ĐỘI HÒA NHAU":own==result.winningTeam()?"ĐỘI BẠN CHIẾN THẮNG!":"ĐỘI BẠN ĐÃ THUA");
+        String reason=switch(result.reason()){case TEAM_ELIMINATED->"Loại hết đối phương";case BOTH_TEAMS_ELIMINATED->"Hai đội cùng bị loại";
+            case TARGET_SCORE->"Đạt ngưỡng điểm";case TIMEOUT->"Hết thời gian";case ABORTED->"Hủy hành chính";};
+        summary.setText("Đội A "+result.scoreA()+" : "+result.scoreB()+" Đội B · "+reason);
+        trophy.setText(aborted?"!":draw?"=":own==result.winningTeam()?"★":"×");trophy.setBackground(draw?new Color(14,165,233):own==result.winningTeam()?new Color(245,158,11):new Color(190,45,68));
+        players.stream().sorted(java.util.Comparator.comparing(MatchStartMetadata.Member::team).thenComparingInt(MatchStartMetadata.Member::playerId)).forEach(p->
+            rows.addRow(new Object[]{p.team().name(),p.username()+(p.playerId()==localId?" (Bạn)":""),aborted?"HỦY":draw?"HÒA":p.team()==result.winningTeam()?"THẮNG":"THUA"}));
+    }
     public void clear(){rows.setRowCount(0);trophy.setText("•");trophy.setBackground(new Color(14,165,233));headline.setText("TRẬN ĐẤU ĐANG DIỄN RA");summary.setText("Đang chờ kết quả từ máy chủ.");}
+    /** Classic/Paradox không có điểm trạm; chỉ hiển thị quyết định đội authoritative. */
+    public void showTeamResult(TeamMatchResult result,java.util.List<MatchStartMetadata.Member> players,int localId){
+        rows.setColumnIdentifiers(new Object[]{"ĐỘI","NGƯỜI CHƠI","KẾT QUẢ"});styleTable();rows.setRowCount(0);
+        TeamId own=players.stream().filter(p->p.playerId()==localId).map(MatchStartMetadata.Member::team).findFirst().orElse(null);
+        boolean aborted=result.reason()==TeamMatchResult.Reason.ABORTED,draw=result.winningTeam()==null,won=own==result.winningTeam();
+        headline.setText(aborted?"TRẬN ĐẤU BỊ HỦY":draw?"HAI ĐỘI HÒA NHAU":won?"ĐỘI BẠN CHIẾN THẮNG!":"ĐỘI BẠN ĐÃ THUA");
+        summary.setText(switch(result.reason()){
+            case TEAM_ELIMINATED->"Đội "+result.winningTeam()+" thắng — đội đối phương đã bị loại hết";
+            case BOTH_TEAMS_ELIMINATED->"Hai đội cùng bị loại trong một tick";
+            case TIMEOUT->"Hết thời gian — cả hai đội vẫn còn người sống";
+            case ABORTED->"Trận đấu được kết thúc trước thời hạn";});
+        trophy.setText(aborted?"!":draw?"=":won?"★":"×");trophy.setBackground(aborted?new Color(190,45,68):draw?new Color(14,165,233):won?new Color(245,158,11):new Color(190,45,68));
+        players.stream().sorted(java.util.Comparator.comparing(MatchStartMetadata.Member::team).thenComparingInt(MatchStartMetadata.Member::slot)).forEach(p->
+                rows.addRow(new Object[]{p.team().name(),p.username()+(p.playerId()==localId?" (Bạn)":""),aborted?"HỦY":draw?"HÒA":p.team()==result.winningTeam()?"THẮNG":"THUA"}));
+    }
     public String summary(){return headline.getText()+" "+summary.getText();}
     public int rowCount(){return rows.getRowCount();}
 
@@ -54,6 +87,6 @@ public final class MatchResultsPanel extends JPanel {
         @Override public Component getTableCellRendererComponent(JTable table,Object value,boolean selected,boolean focus,int row,int column){super.getTableCellRendererComponent(table,value,selected,focus,row,column);setOpaque(true);setBackground(new Color(26,40,61));setForeground(new Color(148,163,184));setFont(UiTheme.BODY.deriveFont(Font.BOLD,11f));setHorizontalAlignment(column==1?SwingConstants.LEFT:SwingConstants.CENTER);setBorder(new EmptyBorder(0,column==1?18:8,0,8));return this;}
     }
     private static final class ResultRenderer extends DefaultTableCellRenderer {
-        @Override public Component getTableCellRendererComponent(JTable table,Object value,boolean selected,boolean focus,int row,int column){super.getTableCellRendererComponent(table,value,selected,focus,row,column);String text=String.valueOf(value);setText(text);setOpaque(true);setBackground(selected?new Color(22,78,108):row%2==0?new Color(14,24,41):new Color(18,30,49));setHorizontalAlignment(column==1?SwingConstants.LEFT:SwingConstants.CENTER);setFont(UiTheme.BODY.deriveFont(column==0||column==2?Font.BOLD:Font.PLAIN,13f));if(column==0)setForeground(row==0?new Color(251,191,36):row==1?new Color(203,213,225):new Color(205,127,50));else if(column==2)setForeground("SỐNG SÓT".equals(text)?new Color(52,211,153):new Color(248,113,113));else setForeground(UiTheme.TEXT);setBorder(new EmptyBorder(0,column==1?18:8,0,8));return this;}
+        @Override public Component getTableCellRendererComponent(JTable table,Object value,boolean selected,boolean focus,int row,int column){super.getTableCellRendererComponent(table,value,selected,focus,row,column);String text=String.valueOf(value);setText(text);setOpaque(true);setBackground(selected?new Color(22,78,108):row%2==0?new Color(14,24,41):new Color(18,30,49));setHorizontalAlignment(column==1?SwingConstants.LEFT:SwingConstants.CENTER);setFont(UiTheme.BODY.deriveFont(column==0||column==2?Font.BOLD:Font.PLAIN,13f));if(column==0)setForeground(row==0?new Color(251,191,36):row==1?new Color(203,213,225):new Color(205,127,50));else if(column==2)setForeground(("S\u1ed0NG S\u00d3T".equals(text)||"TH\u1eaeNG".equals(text))?new Color(52,211,153):new Color(248,113,113));else setForeground(UiTheme.TEXT);setBorder(new EmptyBorder(0,column==1?18:8,0,8));return this;}
     }
 }

@@ -44,7 +44,9 @@ public final class ChatHandler implements AutoCloseable {
                 if (message.senderId() == null || room.getPlayersSnapshot().stream().noneMatch(p ->
                         p.getPlayerId().equals(message.senderId()) && p.getState() != SessionState.DISCONNECTED
                                 && p.getState() != SessionState.CLOSED)) continue;
-                var packet = com.bombit.common.protocol.LobbyPacketCodec.chat(
+                var packet = room.configuration().isPresent()?com.bombit.common.protocol.JsonV3.packet(CHAT_MESSAGE_TYPE,
+                        com.bombit.common.protocol.JsonV3.body("roomId",message.roomId(),"sessionId",message.senderId(),"username",message.senderName(),"message",message.message())):
+                        com.bombit.common.protocol.LobbyPacketCodec.chat(
                         new com.bombit.common.protocol.LobbyPacketCodec.Chat(message.roomId(), message.senderId(),
                                 message.senderName(), message.message()));
                 for (Session session : room.getPlayersSnapshot()) {

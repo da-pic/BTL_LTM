@@ -13,6 +13,9 @@ import java.util.concurrent.atomic.AtomicReference;
 public final class ClientApplication {
     private ClientApplication() { }
     public static void main(String[] args) throws Exception {
+        if(args.length==1&&args[0].equals("--check-runtime")){
+            System.out.println("BombIt Classic + Shadow Relay + Paradox / Java "+Runtime.version().feature());return;
+        }
         UiTheme.install();
         String host = args.length > 0 ? args[0] : "127.0.0.1";
         int port = args.length > 1 ? Integer.parseInt(args[1]) : 8888;
@@ -23,7 +26,7 @@ public final class ClientApplication {
         }
         if (GraphicsEnvironment.isHeadless()) throw new IllegalStateException("Use --headless for a console smoke check");
         if(args.length<4 || !args[3].equals("--demo")) {
-            SwingUtilities.invokeLater(() -> new com.bombit.client.lobby.LobbyWindow(host,port,"").setVisible(true));
+            SwingUtilities.invokeLater(() -> new com.bombit.client.lobby.LobbyWindow(host,port,name).setVisible(true));
             return;
         }
         SwingUtilities.invokeLater(() -> {

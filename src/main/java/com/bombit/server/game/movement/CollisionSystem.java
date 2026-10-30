@@ -68,7 +68,7 @@ public class CollisionSystem {
         // Bom chặn đường. Nhân vật đang chồng ô bom được bước ra; khi đã ra hết
         // hitbox thì không vào lại được. Quy tắc này cũng xử lý lúc hai người đứng cùng ô đặt bom.
         for (EntityData entity : entities) {
-            if (entity.kind() != EntityData.Kind.BOMB) continue;
+            if (entity.kind() != EntityData.Kind.BOMB && entity.kind() != EntityData.Kind.SCAN_PENDING) continue;
             double bx = entity.tileX() * (double) tileSize, by = entity.tileY() * (double) tileSize;
             boolean nextOverlap = x < bx + tileSize && right > bx && y < by + tileSize && bottom > by;
             boolean currentOverlap = player.getX() < bx + tileSize && player.getX() + player.getWidth() > bx

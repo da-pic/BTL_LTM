@@ -36,10 +36,13 @@ public final class RoomManager {
     }
 
     public Room createRoom(String roomName, Session host, int capacity) {
+        return createRoom(roomName,host,capacity,null);
+    }
+    public Room createRoom(String roomName,Session host,int capacity,com.bombit.common.dto.MatchConfiguration configuration){
         requireAvailable(host);
         if (capacity < 2 || capacity > 4) throw new IllegalArgumentException("Capacity must be 2..4");
         String roomId = UUID.randomUUID().toString();
-        Room room = new Room(roomId, roomName, capacity, host);
+        Room room = new Room(roomId, roomName, capacity, host,configuration);
         rooms.put(roomId, room);
         host.setRoomId(roomId);
         host.setState(SessionState.IN_ROOM);
@@ -158,7 +161,16 @@ public final class RoomManager {
 
     public void publishRoomState(Room room) {
         if (!room.isEmpty()) broadcaster.broadcast(room.getRoomId(),
-                OutboundMessage.fromPacket(com.bombit.common.protocol.LobbyPacketCodec.roomState(view(room))));
+                OutboundMessage.fromPacket(room.configuration().isPresent()?com.bombit.common.protocol.MetadataV3Codec.roomState(viewV3(room)):
+                        com.bombit.common.protocol.LobbyPacketCodec.roomState(view(room))));
+    }
+    public static com.bombit.common.dto.RoomStateView viewV3(Room room){
+        synchronized(room){var config=room.configuration().orElseThrow();var members=new java.util.ArrayList<com.bombit.common.dto.RoomStateView.Member>();
+            var players=room.getPlayersSnapshot();for(int i=0;i<players.size();i++){var p=players.get(i);int slot=room.slotOf(p.getPlayerId());members.add(new com.bombit.common.dto.RoomStateView.Member(p.getPlayerId(),p.getUsername(),p.getState().name(),slot,
+                config.teamForSlot(slot),
+                p.getState()==SessionState.READY?room.readyRevision(p.getPlayerId()):null));}
+            return new com.bombit.common.dto.RoomStateView(room.getRoomId(),room.getRoomName(),room.getHostPlayerId(),room.getState().name(),room.getMaxPlayers(),room.getMapSelection(),room.configurationRevision(),config,members);
+        }
     }
 
     public static com.bombit.common.protocol.LobbyPacketCodec.RoomView view(Room room) {

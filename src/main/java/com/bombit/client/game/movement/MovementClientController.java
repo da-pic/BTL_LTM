@@ -34,12 +34,86 @@ public final class MovementClientController implements AutoCloseable {
     private final boolean subscribed;
     private final com.bombit.client.ui.game.bomb.BombScene bombs=new com.bombit.client.ui.game.bomb.BombScene();
     private long plantRequest;
+    private long rewindRequest;
+    private String rewindFeedback="";
+    public String rewindFeedback(){return rewindFeedback;}
+    public void acceptRewindResult(com.bombit.server.game.mode.paradox.ParadoxGameplayExtension.RewindResult result){
+        rewindFeedback=switch(result.outcome()){
+            case ACCEPTED->"Đã đảo toàn bản đồ về 40 tick trước";
+            case NOT_ENOUGH_HISTORY->"Chưa đủ 2 giây lịch sử — lượt chưa bị tiêu";
+            case COOLDOWN->"Rewind toàn trận đang hồi — lượt chưa bị tiêu";
+            case REWIND_BUSY->"Người khác vừa rewind — lượt chưa bị tiêu";
+            case ALREADY_USED->"Bạn đã dùng hết lượt rewind";
+            case NOT_ELIGIBLE->"Chỉ người còn sống, đang kết nối mới được rewind";
+            case NOT_RUNNING->"Trận đã kết thúc hoặc hết thời gian";
+            default->"Yêu cầu rewind đã cũ hoặc không hợp lệ";
+        };
+    }
+    private com.bombit.common.dto.ParadoxFrame paradoxFrame;
+    public com.bombit.common.dto.ParadoxFrame paradox(){return paradoxFrame;}
     private int respawns;
     private volatile boolean recoverySuspended;
     private boolean resetAfterRecovery;
     private long lastAppliedFullTick=-1;
     private final java.util.concurrent.atomic.AtomicLong inputGeneration=new java.util.concurrent.atomic.AtomicLong();
     private volatile Consumer<Throwable> transportErrors;
+    private volatile com.bombit.common.dto.MatchStartMetadata currentMetadata;
+    private boolean serverInputEnabled=true;
+    private ShadowReplica shadowReplica;
+    public ShadowReplica shadow(){return shadowReplica;}
+    public com.bombit.common.dto.MatchStartMetadata metadata(){return currentMetadata;}
+    private String plantFeedback="";
+    public String plantFeedback(){return plantFeedback;}
+    public long estimatedMatchMillis(){return shadowReplica==null?0:Math.max(0,shadowReplica.matchTimeMillis())+Math.min(1000,Math.max(0,(System.nanoTime()-receivedNanos)/1_000_000));}
+    /** Kết quả đã được application codec kiểm tra; UI chỉ thông báo, không tự tạo scan/bom dự đoán. */
+    public void acceptPlantResult(Packet packet){
+        var m=JsonV3.object(packet.getJsonPayload(),16384);String kind="SCAN".equals(m.get("bombType"))?"Scan":"Bom";
+        plantFeedback="ACCEPTED".equals(m.get("status"))?kind+" đã đặt":switch(String.valueOf(m.get("errorCode"))){
+            case "SCAN_COOLDOWN"->"Scan đang hồi";case "BOMB_LIMIT_REACHED"->"Đã đầy quota bom/scan";
+            case "CELL_OCCUPIED","INVALID_CELL"->"Ô này không thể đặt bom/scan";case "RATE_LIMITED"->"Thao tác quá nhanh";
+            default->kind+" bị từ chối";};
+    }
+    /** UI owner: epoch mới bỏ prediction/interpolation cũ, chỉ full đúng context mới mở input. */
+    public void bindCurrentMetadata(com.bombit.common.dto.MatchStartMetadata metadata){
+        if(!metadata.identity().matchId().equals(matchId)||metadata.stream().recipientPlayerId()!=localId)throw new IllegalArgumentException("Wrong controller context");
+        if(currentMetadata!=null){
+            if(metadata.stream().viewEpoch()<=currentMetadata.stream().viewEpoch()
+                    ||metadata.stream().timelineEpoch()<currentMetadata.stream().timelineEpoch())throw new IllegalArgumentException("Stale epoch");
+            if(!metadata.configuration().equals(currentMetadata.configuration())||!metadata.players().equals(currentMetadata.players())
+                    ||!metadata.identity().equals(currentMetadata.identity()))throw new IllegalArgumentException("Changed match identity");
+        }
+        if(metadata.configuration().gameMode()==com.bombit.common.dto.GameMode.SHADOW_RELAY){
+            if(shadowReplica==null)shadowReplica=new ShadowReplica(world,metadata);else shadowReplica.bind(metadata);
+        }else shadowReplica=null;
+        currentMetadata=metadata;paradoxFrame=null;rewindFeedback="";serverInputEnabled=false;suspendForRecovery();prepareRecoveryOnUi();bombs.clear();
+    }
+    public void acceptSnapshotV6(com.bombit.common.dto.RecipientSnapshotV6 snapshot){
+        if(currentMetadata!=null){
+            var mode=currentMetadata.configuration().gameMode();
+            if((snapshot instanceof com.bombit.common.dto.ParadoxSnapshotV6)!=(mode==com.bombit.common.dto.GameMode.PARADOX)
+                    ||(snapshot instanceof com.bombit.common.dto.ShadowSnapshotV6)!=(mode==com.bombit.common.dto.GameMode.SHADOW_RELAY))return;
+        }
+        if(currentMetadata!=null&&currentMetadata.configuration().gameMode()==com.bombit.common.dto.GameMode.PARADOX){
+            if(!(snapshot instanceof com.bombit.common.dto.ParadoxSnapshotV6 paradox)
+                    ||paradox.paradox().timelineEpoch()!=currentMetadata.stream().timelineEpoch())return;
+            if(paradoxFrame!=null&&(paradox.simulationTick()<paradoxFrame.simulationTick()
+                    ||!paradoxFrame.availableCharges().containsAll(paradox.paradox().availableCharges())))throw new IllegalArgumentException("Paradox state regressed within timeline");
+            serverInputEnabled=paradox.inputEnabled();apply(paradox.update());
+            if(world.getTick()==paradox.update().getTick()&&!world.needsFullState())paradoxFrame=paradox.paradox();
+            return;
+        }
+        if(snapshot instanceof com.bombit.common.dto.ShadowSnapshotV6 shadow){
+            if(shadowReplica==null)throw new IllegalStateException("Shadow metadata missing");apply(shadow.update(),shadow);
+        }else{serverInputEnabled=snapshot.inputEnabled();apply(snapshot.update());}
+    }
+    public void acceptNoticeV3(Packet packet){
+        var fields=new java.util.LinkedHashMap<>(JsonV3.object(packet.getJsonPayload(),16384));
+        fields.put("occurredAtMillis",fields.remove("occurredAtMatchMillis"));
+        if(fields.containsKey("explodeAtMatchMillis"))fields.put("explodeAtMillis",fields.remove("explodeAtMatchMillis"));
+        var legacy=JsonV3.packet(packet.getType(),fields);GameplayPacketCodec.validateNotice(legacy);
+        if(packet.getType()==PacketType.BOMB_PLANTED||packet.getType()==PacketType.BOMB_EXPLODE)bombs.notice(BombPacketCodec.decodeNotice(legacy));
+    }
+    private Packet scope(Packet packet,com.bombit.common.dto.MatchStartMetadata metadata)throws java.io.IOException{return metadata!=null?MatchEnvelopeV3Codec.command(matchId,metadata.stream().timelineEpoch(),packet):matchId==null?packet:MatchEnvelopeCodec.wrap(matchId,packet);}
 
     /** Chỉ lỗi gửi mạng dùng recovery; lỗi payload/world vẫn fail và đóng controller. */
     public void setTransportErrorHandler(Consumer<Throwable> handler) { transportErrors=handler; }
@@ -104,17 +178,24 @@ public final class MovementClientController implements AutoCloseable {
             } catch (Exception e) { fail(e); }
     }
     private void apply(GameStateUpdate update) {
+        apply(update,null);
+    }
+    private void apply(GameStateUpdate update,com.bombit.common.dto.ShadowSnapshotV6 shadow) {
         try {
             if(resetAfterRecovery&&!update.isFullState())return;
-            var result=world.apply(update);
+            var result=shadow==null?world.apply(update):shadowReplica.apply(shadow);
             if(result == ClientWorldState.Result.NEED_FULL_STATE) {
                 if(!resyncPending) { resyncPending=true; sender.execute(resync); } return;
             }
             if(result != ClientWorldState.Result.APPLIED) return;
+            if(shadow!=null)serverInputEnabled=shadow.inputEnabled();
             resyncPending=false; receivedNanos=System.nanoTime();
             bombs.synchronize(world,update.getBombFrame(),System.currentTimeMillis(),receivedNanos);
             var player=world.getPlayers().get(localId);
-            if(player == null) { fail(new IllegalStateException("Local player removed")); return; }
+            if(player == null) {
+                if(shadow!=null){serverInputEnabled=false;resetAfterRecovery=false;interpolation.record(world);if(update.isFullState())lastAppliedFullTick=update.getTick();return;}
+                fail(new IllegalStateException("Local player removed")); return;
+            }
             if(prediction == null) {
                 var map=new GameMap(world.getWidth(),world.getHeight(),world.getTileSize());
                 prediction=new PredictionController(map,player);
@@ -137,10 +218,11 @@ public final class MovementClientController implements AutoCloseable {
         if(closed) throw new IllegalStateException("Movement client closed");
         if(recoverySuspended)return;
         long generation=inputGeneration.get();
+        var metadata=currentMetadata;
         enqueue(() -> {
             try { if(!closed&&!recoverySuspended&&generation==inputGeneration.get()) {
                 Packet packet=MovePacketCodec.encode(input);
-                network.send(matchId==null?packet:MatchEnvelopeCodec.wrap(matchId,packet));
+                network.send(scope(packet,metadata));
             } }
             catch(Exception e) { transportFailed(e,generation); }
         });
@@ -148,14 +230,28 @@ public final class MovementClientController implements AutoCloseable {
     public com.bombit.client.ui.game.bomb.BombScene bombs() { return bombs; }
     /** No predicted bomb or damage; wait for the authoritative snapshot. */
     public void plantBomb() {
+        plant(com.bombit.common.dto.BombType.NORMAL);
+    }
+    public void plantScan() {
+        if(shadowReplica!=null)plant(com.bombit.common.dto.BombType.SCAN);
+    }
+    private void plant(com.bombit.common.dto.BombType type) {
         var local=world.getPlayers().get(localId);
         if(!isInputReady()||!bombs.enabled()||local==null||!local.isAlive()||matchId==null) return;
-        Packet command=BombPacketCodec.plant(++plantRequest);
+        Packet command=currentMetadata==null?BombPacketCodec.plant(++plantRequest):JsonV3.packet(PacketType.PLANT_BOMB,JsonV3.body("requestId",++plantRequest,"bombType",type.name()));
         long generation=inputGeneration.get();
+        var metadata=currentMetadata;
         enqueue(()->{
-            try { if(!closed&&!recoverySuspended&&generation==inputGeneration.get())network.send(MatchEnvelopeCodec.wrap(matchId,command)); }
+            try { if(!closed&&!recoverySuspended&&generation==inputGeneration.get())network.send(scope(command,metadata)); }
             catch(Exception e) { transportFailed(e,generation); }
         });
+    }
+    /** API điều khiển Paradox; ACK/result không tự mở input, chỉ full mới quyết định. */
+    public void rewind(){
+        if(!isInputReady()||currentMetadata==null||currentMetadata.configuration().gameMode()!=com.bombit.common.dto.GameMode.PARADOX)return;
+        var metadata=currentMetadata;long generation=inputGeneration.get();var command=ParadoxCodec.rewind(++rewindRequest);
+        enqueue(()->{try{if(!closed&&!recoverySuspended&&generation==inputGeneration.get())network.send(scope(command,metadata));}
+            catch(Exception e){transportFailed(e,generation);}});
     }
     private void transportFailed(Throwable error,long generation) {
         if(closed||generation!=inputGeneration.get())return;
@@ -178,7 +274,7 @@ public final class MovementClientController implements AutoCloseable {
     }
     public ClientWorldState world() { return world; }
     public PredictionController prediction() { return prediction; }
-    public boolean isInputReady() { return !closed && !recoverySuspended && prediction!=null && !world.needsFullState()
+    public boolean isInputReady() { return !closed && serverInputEnabled && !recoverySuspended && prediction!=null && !world.needsFullState()
             && world.getMatchState()==com.bombit.server.game.core.GameState.MatchState.RUNNING; }
     public boolean isClosed() { return closed; }
     public InterpolationController interpolation() { return interpolation; }

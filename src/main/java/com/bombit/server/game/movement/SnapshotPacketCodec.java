@@ -64,6 +64,7 @@ public final class SnapshotPacketCodec {
         // writeUTF dùng modified UTF-8 có length uint16, không phải UTF-8 thuần của PacketEncoder.
         out.writeInt(u.getEntityChanges().size());
         for (var e : u.getEntityChanges()) {
+            if(e.kind()!=EntityData.Kind.BOMB&&e.kind()!=EntityData.Kind.ITEM)throw new IOException("Legacy codec cannot carry Shadow entities");
             out.writeByte(e.kind().ordinal()); out.writeInt(e.id()); out.writeInt(e.tileX()); out.writeInt(e.tileY());
             out.writeUTF(e.ownerId()); out.writeInt(e.variant()); out.writeLong(e.expiresAtMillis());
         }
@@ -145,7 +146,7 @@ public final class SnapshotPacketCodec {
             for (int n = count(in); n > 0; n--) removed.add(in.readInt());
             var entities = new ArrayList<EntityData>();
             for (int n = count(in); n > 0; n--) entities.add(new EntityData(
-                    value(EntityData.Kind.values(), in.readUnsignedByte()), in.readInt(), in.readInt(), in.readInt(),
+                    legacyEntity(in.readUnsignedByte()), in.readInt(), in.readInt(), in.readInt(),
                     in.readUTF(), in.readInt(), in.readLong()));
             var removedEntities = new ArrayList<String>();
             for (int n = count(in); n > 0; n--) removedEntities.add(in.readUTF());
@@ -188,6 +189,9 @@ public final class SnapshotPacketCodec {
         int n = in.readInt();
         if (n < 0 || n > in.available()) throw new IOException("Invalid collection length");
         return n;
+    }
+    private static EntityData.Kind legacyEntity(int code) throws IOException {
+        if(code>1)throw new IOException("Unknown legacy entity");return EntityData.Kind.values()[code];
     }
     private static TileType storedTile(int ordinal) throws IOException {
         TileType tile = value(TileType.values(), ordinal);

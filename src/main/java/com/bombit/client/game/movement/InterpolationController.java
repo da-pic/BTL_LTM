@@ -14,8 +14,15 @@ public final class InterpolationController {
     private final Map<Integer,Integer> respawns=new HashMap<>();
     /** Gọi trên UI: không nội suy qua khoảng mất mạng hoặc bước nhảy vị trí khi phục hồi. */
     public void clear() { frames.clear();respawns.clear(); }
+    /** Hide phải xóa mọi mẫu quá khứ; reveal sau đó không nội suy từ vị trí lần trước còn thấy. */
+    public void forget(int playerId) {
+        var kept=new ArrayDeque<Frame>();
+        for(var frame:frames){var players=new HashMap<>(frame.players());players.remove(playerId);kept.add(new Frame(frame.tick(),Map.copyOf(players)));}
+        frames.clear();frames.addAll(kept);respawns.remove(playerId);
+    }
     public void record(ClientWorldState world) {
         if (!frames.isEmpty() && world.getTick() <= frames.getLast().tick()) return;
+        if(!frames.isEmpty())for(int id:List.copyOf(frames.getLast().players().keySet()))if(!world.getPlayers().containsKey(id))forget(id);
         if(world.getMatchFrame()!=null){
             boolean teleported=false;
             for(var stats:world.getMatchFrame().players()){

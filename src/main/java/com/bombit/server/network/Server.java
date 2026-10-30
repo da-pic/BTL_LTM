@@ -51,11 +51,15 @@ public final class Server implements AutoCloseable {
     private final AtomicBoolean closed = new AtomicBoolean();
     private final AtomicBoolean started = new AtomicBoolean();
     private final int frameTimeoutMillis;
+    private final boolean currentProtocol;
     private volatile java.util.function.Consumer<Session> connected = session -> { };
     private volatile GameEventSink gameObserver = new com.bombit.server.integration.NoOpGameEventSink();
 
     public Server(int port) throws IOException {
         this(port, IntegrationContract.HEARTBEAT_TIMEOUT_MILLIS);
+    }
+    public Server(int port,boolean currentProtocol)throws IOException{
+        this(port,IntegrationContract.HEARTBEAT_TIMEOUT_MILLIS,TimeUnit.SECONDS.toMillis(HEARTBEAT_TIMEOUT_SECONDS),2000,5000,currentProtocol);
     }
 
     /** Shorter frame deadline is useful for deterministic transport tests. */
@@ -64,6 +68,10 @@ public final class Server implements AutoCloseable {
     }
     /** Injectable time bounds keep fault tests short without changing application defaults. */
     public Server(int port,int frameTimeoutMillis,long heartbeatMillis,long sweepMillis,long writeMillis)throws IOException{
+        this(port,frameTimeoutMillis,heartbeatMillis,sweepMillis,writeMillis,false);
+    }
+    private Server(int port,int frameTimeoutMillis,long heartbeatMillis,long sweepMillis,long writeMillis,boolean currentProtocol)throws IOException{
+        this.currentProtocol=currentProtocol;
         if (port < 0 || port > 65535) {
             throw new IllegalArgumentException("Invalid port");
         }
@@ -94,6 +102,7 @@ public final class Server implements AutoCloseable {
             }
         });
         SessionHandlers.register(router, sessionManager, broadcastSender, session -> connected.accept(session));
+        if(currentProtocol)SessionHandlers.registerCurrent(router,sessionManager,broadcastSender,session->connected.accept(session));
         this.roomManager.setBroadcaster(sessionManager::broadcastToRoom);
         this.chatHandler = new ChatHandler(roomManager, broadcastSender, OUTBOUND_QUEUE_CAPACITY);
         this.heartbeatManager = new HeartbeatManager(
@@ -125,7 +134,7 @@ public final class Server implements AutoCloseable {
                 SessionWriter writer = connectionManager.open(session);
                 try {
                     clientPool.execute(new ClientHandler(socket, session, sessionManager,
-                            connectionManager, router, writer, frameTimeoutMillis,e->connectionFailure.compareAndSet(null,e)));
+                            connectionManager, router, writer, frameTimeoutMillis,e->connectionFailure.compareAndSet(null,e),currentProtocol));
                 } catch (RejectedExecutionException rejected) {
                     sessionManager.hardDrop(session.getPlayerId());
                 }

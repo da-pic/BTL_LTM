@@ -9,6 +9,34 @@ import java.util.*;
  * không dùng chung trực tiếp cho network thread hoặc Swing khi GameLoop đang chạy.
  */
 public class Player {
+    /** Chỉ phần mô phỏng được rewind; ACK/input sequence và identity giữ giá trị hiện hành. */
+    public record SimulationCheckpoint(int playerId, double x, double y, double speed,
+            com.bombit.server.game.model.Direction direction, boolean moving, boolean alive,
+            int bombLimit, int bombRange, int lives, int respawns, boolean shield) {
+        public SimulationCheckpoint {
+            validatePosition(x, y); validatePositive(speed, "speed"); Objects.requireNonNull(direction);
+            if (playerId <= 0 || bombLimit <= 0 || bombRange <= 0 || lives < 0 || respawns < 0
+                    || (alive && lives == 0) || (moving && !alive))
+                throw new IllegalArgumentException("Invalid player checkpoint");
+        }
+    }
+
+    public SimulationCheckpoint captureSimulation() {
+        return new SimulationCheckpoint(id, x, y, speed, direction, moving, alive,
+                bombLimit, bombRange, lives, respawns, shield);
+    }
+
+    /** Coordinator phải áp lại frozen theo kết nối hiện tại sau khi restore toàn world. */
+    public void restoreSimulation(SimulationCheckpoint checkpoint) {
+        Objects.requireNonNull(checkpoint);
+        if (checkpoint.playerId() != id) throw new IllegalArgumentException("Wrong player checkpoint");
+        x = checkpoint.x(); y = checkpoint.y(); speed = checkpoint.speed(); direction = checkpoint.direction();
+        moving = checkpoint.moving(); alive = checkpoint.alive(); bombLimit = checkpoint.bombLimit();
+        bombRange = checkpoint.bombRange(); lives = checkpoint.lives(); respawns = checkpoint.respawns();
+        shield = checkpoint.shield();
+        // Không replay mẫu input của nhánh cũ. lastProcessedInput vẫn tăng đơn điệu.
+        inputAppliedThisTick = false;
+    }
     private int bombLimit=1,bombRange=1;
     private int lives=1,respawns;
     private boolean shield;

@@ -20,8 +20,14 @@ public final class BombWorldAdapter implements BombWorld {
     private final Map<TilePosition,Integer> cells=new HashMap<>();
     private final Map<Integer,Long> plantedNanos=new HashMap<>();
     private Thread owner;
+    private final com.bombit.server.game.bomb.BombExtras extras;
 
     public BombWorldAdapter(GameState state,Map<String,Integer> players,BombRules rules,LongSupplier nanoClock) {
+        this(state,players,rules,nanoClock,com.bombit.server.game.bomb.BombExtras.NONE);
+    }
+    public BombWorldAdapter(GameState state,Map<String,Integer> players,BombRules rules,LongSupplier nanoClock,
+                            com.bombit.server.game.bomb.BombExtras extras) {
+        this.extras=Objects.requireNonNull(extras);
         this.state=Objects.requireNonNull(state);this.players=Map.copyOf(players);
         this.rules=Objects.requireNonNull(rules);this.nanoClock=Objects.requireNonNull(nanoClock);
         if(new HashSet<>(players.values()).size()!=players.size()) throw new IllegalArgumentException("Duplicate player mapping");
@@ -44,14 +50,16 @@ public final class BombWorldAdapter implements BombWorld {
     @Override public int playerBombLimit(String id) { Player p=player(id);return p==null?rules.quota():p.getBombLimit(); }
     @Override public int playerBombRange(String id) { Player p=player(id);return p==null?rules.range():p.getBombRange(); }
     @Override public int activeBombCount(String id) {
-        checkThread();return (int)bombs.values().stream().filter(b->b.ownerPlayerId().equals(id)).count();
+        checkThread();return (int)bombs.values().stream().filter(b->b.ownerPlayerId().equals(id)).count()+extras.activeCount(id);
     }
     @Override public TileType tileType(TilePosition p) { checkThread();return state.getMap().tileAt(p.x(),p.y()); }
     @Override public Optional<Bomb> bombAt(TilePosition p) { checkThread();return Optional.ofNullable(cells.get(p)).map(bombs::get); }
+    @Override public boolean isCellOccupied(TilePosition p) { checkThread();return cells.containsKey(p)||extras.occupies(p); }
+    @Override public void hitByBlast(TilePosition p) { checkThread();extras.hitByBlast(p); }
     @Override public Optional<Bomb> bombById(int id) { checkThread();return Optional.ofNullable(bombs.get(id)); }
     @Override public void addBomb(Bomb bomb) {
         checkThread();
-        if(bombs.containsKey(bomb.id())||cells.containsKey(bomb.position())||tileType(bomb.position())!=TileType.EMPTY)
+        if(bombs.containsKey(bomb.id())||isCellOccupied(bomb.position())||tileType(bomb.position())!=TileType.EMPTY)
             throw new IllegalArgumentException("Invalid bomb cell or ID");
         long planted=nanoClock.getAsLong();
         state.putEntity(new EntityData(EntityData.Kind.BOMB,bomb.id(),bomb.position().x(),bomb.position().y(),
@@ -80,5 +88,42 @@ public final class BombWorldAdapter implements BombWorld {
     }
     public void clear() {
         checkThread();for(Bomb b:List.copyOf(bombs.values())) {b.cancel();removeBomb(b.id());}
+    }
+
+    /** Tuổi bom dùng nano clock, không lưu deadline tuyệt đối để restore không nổ sớm. */
+    public record SavedBomb(int id, String ownerId, TilePosition position, long fuseMillis,
+            int range, long ageNanos, boolean queued) {
+        public SavedBomb {
+            Objects.requireNonNull(ownerId); Objects.requireNonNull(position);
+            if (id <= 0 || range <= 0 || fuseMillis <= 0 || fuseMillis > Long.MAX_VALUE / 1_000_000L || ageNanos < 0)
+                throw new IllegalArgumentException("Invalid saved bomb");
+        }
+    }
+    public List<SavedBomb> captureCheckpoint() {
+        checkThread(); long now = nanoClock.getAsLong();
+        return bombs.values().stream().map(b -> new SavedBomb(b.id(), b.ownerPlayerId(), b.position(),
+                b.fuseMillis(), b.range(), now - plantedNanos.get(b.id()),
+                b.state() == com.bombit.server.game.bomb.BombState.QUEUED_TO_EXPLODE)).toList();
+    }
+    public void validateRestore(List<SavedBomb> saved) {
+        checkThread(); Objects.requireNonNull(saved);
+        var ids = new HashSet<Integer>(); var positions = new HashSet<TilePosition>();
+        for (var bomb : saved) {
+            if (!ids.add(bomb.id()) || !positions.add(bomb.position()) || !players.containsKey(bomb.ownerId())
+                    || !state.getMap().isInsideMap(bomb.position().x(), bomb.position().y()))
+                throw new IllegalArgumentException("Invalid bomb checkpoint");
+        }
+    }
+    public void restoreCheckpoint(List<SavedBomb> saved, long epochMillis) {
+        validateRestore(saved);
+        for (var bomb : saved) if (state.getMap().tileAt(bomb.position().x(), bomb.position().y()) != TileType.EMPTY)
+            throw new IllegalArgumentException("Bomb checkpoint on blocked tile");
+        clear(); long now = nanoClock.getAsLong();
+        for (var b : saved) {
+            var bomb = new Bomb(b.id(), b.ownerId(), b.position(), epochMillis - b.ageNanos() / 1_000_000L, b.fuseMillis(), b.range());
+            if (b.queued()) bomb.queueExplosion();
+            addBomb(bomb);
+            plantedNanos.put(b.id(), now - b.ageNanos());
+        }
     }
 }

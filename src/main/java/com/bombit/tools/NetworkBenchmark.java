@@ -151,7 +151,7 @@ public final class NetworkBenchmark {
         String error="";boolean cleanup=true;int port=c.port();double elapsed=0;String stamp=Instant.now().toString();
         try{
             if(c.local()){
-                server=new LobbyGameServer(0,new BombRules(3000,1,1),new MatchRules((c.seconds()+c.warmup()+30L)*1000,.75,5,8,144,8,3,99));
+                server=LobbyGameServer.legacyDiagnostic(0,new BombRules(3000,1,1),new MatchRules((c.seconds()+c.warmup()+30L)*1000,.75,5,8,144,8,3,99));
                 var localServer=server;accept=new Thread(()->{try{localServer.start();}catch(Throwable e){serverFailure.set(e);}},"Benchmark-Server");accept.start();port=server.port();
             }
             for(int n=0;n<c.clients();n++)peers.add(new Peer(c.host(),port,"Bench "+(n+1)));

@@ -27,12 +27,19 @@ class BombClientIntegrationTest {
         final Queue<Throwable> failures=new ConcurrentLinkedQueue<>();
         final BlockingQueue<Packet> lobby=new LinkedBlockingQueue<>();
         final Queue<String> statuses=new ConcurrentLinkedQueue<>();
-        final GameClientConnection connection=new GameClientConnection(ui,c->{},statuses::add,failures::add);
+        final GameClientConnection connection;
         Client(int port,String name)throws Exception {
+            this(port,name,false);
+        }
+        Client(int port,String name,boolean current)throws Exception {
+            connection=current?GameClientConnection.current(ui,c->{},statuses::add,failures::add):new GameClientConnection(ui,c->{},statuses::add,failures::add);
             connection.setLobbyListener(lobby::add);connection.connect("127.0.0.1",port,name);
         }
         <T>T call(Callable<T> action)throws Exception {return ui.submit(action).get(2,TimeUnit.SECONDS);}
-        void command(short type,Map<String,?> body){connection.send(LobbyPacketCodec.packet(type,body));}
+        void command(short type,Map<String,?> body){var fields=new LinkedHashMap<String,Object>(body);
+            if(connection.isCurrentProtocol()&&connection.roomState()!=null&&(type==PacketType.READY||type==PacketType.START_GAME||type==PacketType.LEAVE_ROOM||type==PacketType.CHAT||type==PacketType.SET_MAP_SELECTION)){
+                fields.put("roomId",connection.roomState().roomId());if(type==PacketType.READY||type==PacketType.START_GAME)fields.put("configurationRevision",connection.roomState().configurationRevision());}
+            connection.send(JsonV3.packet(type,fields));}
         Packet take(short type)throws Exception {
             long end=System.nanoTime()+TimeUnit.SECONDS.toNanos(4);
             while(System.nanoTime()<end){var p=lobby.poll(100,TimeUnit.MILLISECONDS);if(p!=null&&p.getType()==type)return p;}
@@ -93,7 +100,7 @@ class BombClientIntegrationTest {
     @Test void defaultLobbyBootstrapEnablesBombsWithoutAnInjectedRuntime()throws Exception {
         var server=new LobbyGameServer(0);var failure=new AtomicReference<Throwable>();
         var accept=new Thread(()->{try{server.start();}catch(Throwable e){failure.set(e);}});accept.start();
-        try(server;var a=new Client(server.port(),"Default A");var b=new Client(server.port(),"Default B")) {
+        try(server;var a=new Client(server.port(),"Default A",true);var b=new Client(server.port(),"Default B",true)) {
             start(a,b);assertTrue(a.call(()->a.connection.movement().bombs().enabled()));
             assertTrue(b.call(()->b.connection.movement().bombs().enabled()));
             for(var client:List.of(a,b))client.call(()->{
@@ -145,15 +152,19 @@ class BombClientIntegrationTest {
     }
     static String start(Client a,Client b)throws Exception {
         a.command(PacketType.CREATE_ROOM,Map.of("roomName","Bomb clients","maxPlayers",2));
-        String room=LobbyPacketCodec.decodeRoom(a.take(PacketType.ROOM_STATE)).roomId();
+        String room=roomView(a,a.take(PacketType.ROOM_STATE)).roomId();
         b.command(PacketType.JOIN_ROOM,Map.of("roomId",room));b.take(PacketType.ROOM_STATE);
         b.command(PacketType.READY,Map.of("ready",true));
         waitFor(()->b.call(()->b.lobby.stream().filter(p->p.getType()==PacketType.ROOM_STATE)
-                .map(LobbyPacketCodec::decodeRoom).anyMatch(r->r.players().stream().anyMatch(p->p.state().equals("READY")))));
+                .map(p->roomView(b,p)).anyMatch(r->r.players().stream().anyMatch(p->p.state().equals("READY")))));
         a.command(PacketType.START_GAME,Map.of());
         waitFor(()->a.call(()->a.connection.movement()!=null&&a.connection.movement().isInputReady())
                 &&b.call(()->b.connection.movement()!=null&&b.connection.movement().isInputReady()));
         return room;
+    }
+    static LobbyPacketCodec.RoomView roomView(Client client,Packet packet){
+        if(!client.connection.isCurrentProtocol())return LobbyPacketCodec.decodeRoom(packet);
+        var r=MetadataV3Codec.decodeRoom(packet);return new LobbyPacketCodec.RoomView(r.roomId(),r.roomName(),r.hostId(),r.state(),r.maxPlayers(),r.mapSelection(),r.players().stream().map(p->new LobbyPacketCodec.Player(p.sessionId(),p.username(),p.state())).toList());
     }
     private interface Check {boolean test()throws Exception;}
     private static void waitFor(Check done)throws Exception {

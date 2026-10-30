@@ -17,6 +17,7 @@ public final class PacketType {
     public static final short START_GAME = 0x0014;
     public static final short GAME_STARTED = 0x0015;
     public static final short SET_MAP_SELECTION = 0x0019;
+    public static final short SET_MATCH_CONFIGURATION = 0x001A;
     public static final short LEAVE_ROOM = 0x0016;
     public static final short CHAT = 0x0017;
     public static final short LIST_ROOMS = 0x0018;
@@ -27,6 +28,9 @@ public final class PacketType {
     public static final short ITEM_SPAWN = 0x0024;
     public static final short ITEM_PICKED_UP = 0x0025;
     public static final short PLAYER_DIE = 0x0026;
+    public static final short PLANT_RESULT = 0x0027;
+    public static final short REWIND = 0x0028;
+    public static final short REWIND_RESULT = 0x0029;
     public static final short GAME_SNAPSHOT = 0x0030;
     public static final short GAME_OVER = 0x0031;
     public static final short PLAYER_DISCONNECTED = 0x0032;
@@ -50,6 +54,9 @@ public final class PacketType {
         names.put(ROOM_STATE, "ROOM_STATE"); names.put(READY, "READY");
         names.put(START_GAME, "START_GAME"); names.put(GAME_STARTED, "GAME_STARTED");
         names.put(SET_MAP_SELECTION, "SET_MAP_SELECTION");
+        names.put(SET_MATCH_CONFIGURATION, "SET_MATCH_CONFIGURATION");
+        names.put(PLANT_RESULT, "PLANT_RESULT");
+        names.put(REWIND,"REWIND");names.put(REWIND_RESULT,"REWIND_RESULT");
         names.put(LEAVE_ROOM, "LEAVE_ROOM"); names.put(CHAT, "CHAT");
         names.put(LIST_ROOMS, "LIST_ROOMS"); names.put(END_GAME, "END_GAME");
         names.put(MOVE, "MOVE"); names.put(PLANT_BOMB, "PLANT_BOMB");
