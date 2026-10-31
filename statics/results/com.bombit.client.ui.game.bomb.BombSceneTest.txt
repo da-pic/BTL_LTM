@@ -1,0 +1,4 @@
+-------------------------------------------------------------------------------
+Test set: com.bombit.client.ui.game.bomb.BombSceneTest
+-------------------------------------------------------------------------------
+Tests run: 2, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.078 s -- in com.bombit.client.ui.game.bomb.BombSceneTest

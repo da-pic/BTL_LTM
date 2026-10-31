@@ -75,6 +75,10 @@ Desktop.ini
 
 # Keep source, scripts, .github workflows and docs/measurements/*.csv versioned.
 # Runtime measurements, previews and release packages are generated under target/ above.
+!/statics/
+!/statics/results/
+!/statics/results/*.log
+!/statics/results/**/*.log
 
 # Local assignment documents and report workspace
 /phancong/CAU_TRUC_BAO_CAO_VA_PHAN_CONG.docx
